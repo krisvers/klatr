@@ -1,11 +1,16 @@
-project('klatr', 'cpp', default_options: [ 'cpp_std=c++17' ])
+project('klatr',
+    'cpp',
+    license: 'MIT',
+    version: '0.0.1',
+    default_options: [ 'cpp_std=c++17' ]
+)
 
 vkom_subproject = subproject('vkom')
 kom_subproject = subproject('kom')
 sdl3_subproject = subproject('sdl3')
 
-vkom = dependency('vkom', version: '0.1.0', required: true)
-kom = dependency('kom', version: '1.0.0', required: true)
+vkom = dependency('vkom', version: '0.1.1', required: true)
+kom = dependency('kom', version: '1.0.1', required: true)
 sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
 
 klatr_sources = [
