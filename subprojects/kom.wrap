@@ -1,0 +1,9 @@
+[wrap-file]
+directory = kom-1.0.0
+source_url = https://github.com/krisvers/kom/archive/refs/tags/1.0.0.tar.gz
+source_filename = kom-1.0.0.tar.gz
+source_hash = 8226863490d469a339d3c9f90b6d92879bfb29fc5b582bafe3558c2ff8bde126
+wrapdb_version = 1.0.0
+
+[provide]
+dependency_names = kom
