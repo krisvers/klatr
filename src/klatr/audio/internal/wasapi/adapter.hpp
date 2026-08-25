@@ -1,9 +1,10 @@
 #pragma once
 
 #include <klatr/audio/audio.hpp>
-#include <klatr/audio/instance.hpp>
 
 #ifdef KLATR_AUDIO_BACKEND_WASAPI
+
+#include <klatr/audio/adapter.hpp>
 
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -16,7 +17,7 @@ namespace internal {
 
 namespace wasapi {
 
-class WASAPIInstance : virtual public IInstance {
+class WASAPIAdapter : virtual public IAdapter {
 private:
 
 
@@ -33,21 +34,3 @@ public:
 }
 
 #endif
-
-namespace klatr {
-
-namespace audio {
-
-namespace internal {
-
-namespace wasapi {
-
-IInstance* createInstance() noexcept;
-
-}
-
-}
-
-}
-
-}
