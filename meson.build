@@ -19,10 +19,10 @@ klatr_sources = [
 
     # klatr headers
     'src/klatr/enums.hpp',
-    'src/klatr/object.hpp',
     'src/klatr/platform.hpp',
 
     # klatr main
+    'src/klatr/object.hpp', 'src/klatr/object.cpp',
     'src/klatr/klatr.hpp', 'src/klatr/klatr.cpp',
 
     # klatr audio headers
@@ -31,15 +31,29 @@ klatr_sources = [
 
     # klatr audio
     'src/klatr/audio/instance.hpp', 'src/klatr/audio/instance.cpp',
+    'src/klatr/audio/adapter.hpp',
+    'src/klatr/audio/device.hpp',
 
     # WASPI audio implementation
-    'src/klatr/audio/internal/wasapi/instance.hpp', 'src/klatr/audio/internal/wasapi/instance.cpp',
+    'src/klatr/audio/wasapi/enums.hpp',
+    'src/klatr/audio/wasapi/wasapi.hpp',
+    'src/klatr/audio/wasapi/instance.hpp', 'src/klatr/audio/wasapi/instance.cpp',
+    'src/klatr/audio/wasapi/adapter.hpp', 'src/klatr/audio/wasapi/adapter.cpp',
+    'src/klatr/audio/wasapi/device.hpp', 'src/klatr/audio/wasapi/device.cpp',
 
     # CoreAudio audio implementation
-    'src/klatr/audio/internal/coreaudio/instance.hpp', 'src/klatr/audio/internal/coreaudio/instance.cpp',
+    'src/klatr/audio/coreaudio/enums.hpp',
+    'src/klatr/audio/coreaudio/coreaudio.hpp',
+    'src/klatr/audio/coreaudio/instance.hpp', 'src/klatr/audio/coreaudio/instance.cpp',
+    'src/klatr/audio/coreaudio/adapter.hpp', 'src/klatr/audio/coreaudio/adapter.cpp',
+    'src/klatr/audio/coreaudio/device.hpp', 'src/klatr/audio/coreaudio/device.cpp',
 
     # ALSA audio implementation
-    'src/klatr/audio/internal/alsa/instance.hpp', 'src/klatr/audio/internal/alsa/instance.cpp',
+    'src/klatr/audio/alsa/enums.hpp',
+    'src/klatr/audio/alsa/alsa.hpp',
+    'src/klatr/audio/alsa/instance.hpp', 'src/klatr/audio/alsa/instance.cpp',
+    'src/klatr/audio/alsa/adapter.hpp', 'src/klatr/audio/alsa/adapter.cpp',
+    'src/klatr/audio/alsa/device.hpp', 'src/klatr/audio/alsa/device.cpp',
 ]
 
 klatr_includes = include_directories('src')

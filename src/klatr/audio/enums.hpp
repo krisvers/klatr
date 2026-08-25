@@ -17,6 +17,8 @@ enum class InstanceBackendFlags : uint32_t {
     /* fallback */
     DirectSound = 0x0008,
     OSS = 0x0010,
+
+    Any = 0xffff,
 };
 
 KLATR_DEFINE_ENUM_BITFLAGS_OPERATORS(InstanceBackendFlags)

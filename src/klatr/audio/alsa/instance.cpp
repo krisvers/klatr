@@ -1,17 +1,17 @@
-#include <klatr/audio/internal/alsa/instance.hpp>
+#include <klatr/audio/alsa/instance.hpp>
 
 #ifdef KLATR_AUDIO_BACKEND_ALSA
+
+#include <klatr/audio/alsa/alsa.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace alsa {
 
-
-
+IInstance* createInstance() noexcept {
+    return nullptr;
 }
 
 }
@@ -26,14 +26,10 @@ namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace alsa {
 
 IInstance* createInstance() noexcept {
     return nullptr;
-}
-
 }
 
 }

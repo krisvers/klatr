@@ -3,20 +3,17 @@
 #include <klatr/audio/audio.hpp>
 #include <klatr/audio/instance.hpp>
 
-#ifdef KLATR_AUDIO_BACKEND_WASAPI
+#ifdef KLATR_AUDIO_BACKEND_ALSA
 
-#include <mmdeviceapi.h>
-#include <audioclient.h>
+#include <klatr/audio/alsa/alsa.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
+namespace alsa {
 
-namespace wasapi {
-
-class WASAPIInstance : virtual public IInstance {
+class ALSAInstance : virtual public IInstance, virtual public CollectedByHeap, virtual public ParentByVector {
 private:
 
 
@@ -30,21 +27,15 @@ public:
 
 }
 
-}
-
 #endif
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
-namespace wasapi {
+namespace alsa {
 
 IInstance* createInstance() noexcept;
-
-}
 
 }
 

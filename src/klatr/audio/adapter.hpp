@@ -25,7 +25,6 @@ struct AdapterInfo {
 class IAdapter : virtual public IAudioElement, virtual public IParent, virtual public IChild {
 public:
     virtual void getInfo(AdapterInfo* info) const noexcept = 0;
-
     virtual IDevice* createDevice(DeviceInfo const* info) noexcept = 0;
 
     static inline IID const& iid() noexcept {

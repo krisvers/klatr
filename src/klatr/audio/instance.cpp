@@ -3,9 +3,9 @@
 #include <klatr/audio/audio.hpp>
 #include <klatr/audio/enums.hpp>
 
-#include <klatr/audio/internal/wasapi/instance.hpp>
-#include <klatr/audio/internal/coreaudio/instance.hpp>
-#include <klatr/audio/internal/alsa/instance.hpp>
+#include <klatr/audio/wasapi/instance.hpp>
+#include <klatr/audio/coreaudio/instance.hpp>
+#include <klatr/audio/alsa/instance.hpp>
 
 namespace klatr {
 
@@ -32,21 +32,21 @@ InstanceBackendFlags querySupportedInstanceBackends() noexcept {
 
 IInstance* createInstance(InstanceBackendFlags backends) noexcept {
     if ((backends & InstanceBackendFlags::WASAPI) != InstanceBackendFlags::None) {
-        IInstance* instance = internal::wasapi::createInstance();
+        IInstance* instance = wasapi::createInstance();
         if (instance != nullptr) {
             return instance;
         }
     }
 
     if ((backends & InstanceBackendFlags::CoreAudio) != InstanceBackendFlags::None) {
-        IInstance* instance = internal::coreaudio::createInstance();
+        IInstance* instance = coreaudio::createInstance();
         if (instance != nullptr) {
             return instance;
         }
     }
 
     if ((backends & InstanceBackendFlags::ALSA) != InstanceBackendFlags::None) {
-        IInstance* instance = internal::alsa::createInstance();
+        IInstance* instance = alsa::createInstance();
         if (instance != nullptr) {
             return instance;
         }

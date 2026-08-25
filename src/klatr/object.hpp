@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <kom/kom.hpp>
 
 namespace klatr {
@@ -18,8 +20,8 @@ public:
 
 class ICollected : virtual public IBase {
 public:
-    virtual uint32_t retain() noexcept = 0;
-    virtual uint32_t release() noexcept = 0;
+    virtual uint32_t retain() = 0;
+    virtual uint32_t release() = 0;
 
     static inline IID const& iid() noexcept {
         static IID iid = IID("d1ebd19c-1149-4868-8f0f-e6881b3f2232");
@@ -60,6 +62,38 @@ public:
         static IID iid = IID("589186c1-6270-4cea-a31f-f46be34292b4");
         return iid;
     }
+};
+
+class CollectedByHeap : virtual public ICollected {
+private:
+    uint32_t _referenceCount = 0;
+
+public:
+    CollectedByHeap() = default;
+    virtual ~CollectedByHeap() = 0;
+
+    uint32_t release() override;
+    uint32_t retain() override;
+
+protected:
+    uint32_t referenceCount() const noexcept;
+};
+
+class ParentByVector : virtual public IParent {
+private:
+    std::vector<IChild*> _children = {};
+
+public:
+    ParentByVector() = default;
+    virtual ~ParentByVector() = 0;
+
+    bool hasChild(IChild const* child) const noexcept override;
+    IChild* enumerateChildren(uint32_t id, IID const& filter) const noexcept override;
+    bool adopt(IChild* child) noexcept override;
+    bool disown(IChild* child) noexcept override;
+
+protected:
+    void disownAll() noexcept;
 };
 
 }

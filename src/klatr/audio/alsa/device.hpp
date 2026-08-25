@@ -4,27 +4,23 @@
 
 #ifdef KLATR_AUDIO_BACKEND_ALSA
 
-#include <klatr/audio/adapter.hpp>
+#include <klatr/audio/device.hpp>
 
-#include <alsa/asoundlib.h>
+#include <klatr/audio/alsa/alsa.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace alsa {
 
-class ALSAAdapter : virtual public IAdapter {
+class ALSADevice : virtual public IDevice, virtual public CollectedByHeap, virtual public ParentByVector {
 private:
 
 
 public:
 
 };
-
-}
 
 }
 

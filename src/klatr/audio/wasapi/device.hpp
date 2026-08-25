@@ -6,26 +6,21 @@
 
 #include <klatr/audio/device.hpp>
 
-#include <mmdeviceapi.h>
-#include <audioclient.h>
+#include <klatr/audio/wasapi/wasapi.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace wasapi {
 
-class WASAPIDevice : virtual public IDevice {
+class WASAPIDevice : virtual public IDevice, virtual public CollectedByHeap, virtual public ParentByVector {
 private:
 
 
 public:
 
 };
-
-}
 
 }
 

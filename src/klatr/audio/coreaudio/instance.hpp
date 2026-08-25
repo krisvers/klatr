@@ -5,18 +5,15 @@
 
 #ifdef KLATR_AUDIO_BACKEND_COREAUDIO
 
-#include <CoreAudio/CoreAudio.h>
-#include <CoreServices/CoreServices.h>
+#include <klatr/audio/coreaudio/coreaudio.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace coreaudio {
 
-class CoreAudioInstance : virtual public IInstance {
+class CoreAudioInstance : virtual public IInstance, virtual public CollectedByHeap, virtual public ParentByVector {
 private:
 
 
@@ -30,21 +27,15 @@ public:
 
 }
 
-}
-
 #endif
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace coreaudio {
 
 IInstance* createInstance() noexcept;
-
-}
 
 }
 

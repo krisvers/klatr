@@ -1,17 +1,17 @@
-#include <klatr/audio/internal/coreaudio/instance.hpp>
+#include <klatr/audio/coreaudio/instance.hpp>
 
 #ifdef KLATR_AUDIO_BACKEND_COREAUDIO
+
+#include <klatr/audio/coreaudio/coreaudio.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace coreaudio {
 
-
-
+IInstance* createInstance() noexcept {
+    return nullptr;
 }
 
 }
@@ -26,14 +26,10 @@ namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace coreaudio {
 
 IInstance* createInstance() noexcept {
     return nullptr;
-}
-
 }
 
 }

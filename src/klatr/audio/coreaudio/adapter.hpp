@@ -4,28 +4,23 @@
 
 #ifdef KLATR_AUDIO_BACKEND_COREAUDIO
 
-#include <klatr/audio/device.hpp>
+#include <klatr/audio/adapter.hpp>
 
-#include <CoreServices/CoreServices.h>
-#include <CoreAudio/CoreAudio.h>
+#include <klatr/audio/coreaudio/coreaudio.hpp>
 
 namespace klatr {
 
 namespace audio {
 
-namespace internal {
-
 namespace coreaudio {
 
-class CoreAudioDevice : virtual public IDevice {
+class CoreAudioAdapter : virtual public IAdapter, virtual public ParentByVector {
 private:
 
 
 public:
 
 };
-
-}
 
 }
 
