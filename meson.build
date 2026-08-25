@@ -1,7 +1,7 @@
 project('klatr',
     [ 'c', 'cpp' ],
     license: 'MIT',
-    version: '0.0.1',
+    version: '0.0.2',
     default_options: [ 'cpp_std=c++17' ]
 )
 
@@ -9,7 +9,7 @@ vkom_subproject = subproject('vkom')
 kom_subproject = subproject('kom')
 sdl3_subproject = subproject('sdl3')
 
-vkom = dependency('vkom', version: '0.1.1', required: true)
+vkom = dependency('vkom', version: '0.1.2', required: true)
 kom = dependency('kom', version: '1.0.1', required: true)
 sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
 
@@ -52,7 +52,6 @@ if host_machine.system() == 'windows'
     klatr_platform_specific_dependencies = [
         # WASAPI and Windows COM dependencies
         cc.find_library('ole32'),
-        cc.find_library('ksguid'),
         cc.find_library('uuid')
     ]
 elif host_machine.system() == 'darwin'
