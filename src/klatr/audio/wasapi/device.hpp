@@ -16,21 +16,38 @@ namespace audio {
 
 namespace wasapi {
 
-class WASAPIDevice : virtual public IDevice, virtual public CollectedByHeap, virtual public ParentByVector {
+/* NOTE: while this implements IOutputDevice and IInputDevice, only
+    instances that support each flow will advertise their interfaces
+*/
+
+class WASAPIDevice : virtual public IDevice, virtual public IOutputDevice, virtual public IInputDevice, virtual public CollectedByHeap, virtual public ParentByVector {
 private:
     IAdapter* _adapter = nullptr;
     IInstance* _instance = nullptr;
     IAudioClient* _audioClient = nullptr;
+    IAudioRenderClient* _audioRenderClient = nullptr;
+    IAudioCaptureClient* _audioCaptureClient = nullptr;
     DeviceInfo _info = {};
 
 public:
     WASAPIDevice(IAdapter* adapter, IAudioClient* audioClient, DeviceInfo const& info);
     ~WASAPIDevice();
 
+    /* IOutputDevice */
+    IOutputBuffer* acquireOutputBuffer(uint32_t frameCount) noexcept override;
+
+    /* IInputDevice */
+    IInputBuffer* acquireInputBuffer() noexcept override;
+
     /* IDevice */
     void getInfo(DeviceInfo* info) const noexcept override;
 
-    /* IParent */
+    bool start() noexcept override;
+    bool stop() noexcept override;
+
+    uint32_t currentPadding() const noexcept override;
+
+    /* IChild */
     IParent* parent() const noexcept override;
 
     /* IInterface */

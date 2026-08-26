@@ -35,7 +35,7 @@ public:
     void getInfo(AdapterInfo* info) const noexcept override;
     IDevice* createDevice(DeviceInfo const* info) noexcept override;
 
-    /* IParent */
+    /* IChild */
     IParent* parent() const noexcept override;
 
     /* IInterface */
