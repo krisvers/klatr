@@ -66,7 +66,8 @@ if host_machine.system() == 'windows'
     klatr_platform_specific_dependencies = [
         # WASAPI and Windows COM dependencies
         cc.find_library('ole32'),
-        cc.find_library('uuid')
+        cc.find_library('uuid'),
+        cc.find_library('winmm'),
     ]
 elif host_machine.system() == 'darwin'
     klatr_platform_specific_dependencies = [

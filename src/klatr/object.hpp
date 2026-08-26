@@ -39,7 +39,7 @@ public:
     virtual bool disown(IChild* child) noexcept = 0;
 
     template<typename T>
-    T* enumerateChildren(uint32_t id) const noexcept {
+    inline T* enumerateChildren(uint32_t id) const noexcept {
         return enumerateChildren(id, T::iid())->template queryInterface<T>();
     }
 
@@ -54,7 +54,7 @@ public:
     virtual IParent* parent() const noexcept = 0;
 
     template<typename T>
-    T* parent() const noexcept {
+    inline T* parent() const noexcept {
         return parent()->queryInterface<T>();
     }
 

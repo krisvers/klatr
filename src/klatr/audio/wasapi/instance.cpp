@@ -15,28 +15,33 @@ namespace audio {
 namespace wasapi {
 
 WASAPIInstance::WASAPIInstance() {
-    if (!SUCCEEDED(CoInitialize(nullptr))) {
-        throw std::runtime_error("CoInitialize failed");
+    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(result)) {
+        throw std::runtime_error("CoInitializeEx failed");
     }
 
-    if (!SUCCEEDED(CoCreateInstance(__uuidof(IMMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&_mmDeviceEnumerator)))) {
+    result = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&_mmDeviceEnumerator));
+    if (FAILED(result)) {
         throw std::runtime_error("CoCreateInstance for IMMDeviceEnumerator failed");
     }
 
     IMMDeviceCollection* mmRenderDeviceCollection;
-    if (!SUCCEEDED(_mmDeviceEnumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED, &mmRenderDeviceCollection))) {
+    result = _mmDeviceEnumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &mmRenderDeviceCollection);
+    if (FAILED(result)) {
         throw std::runtime_error("IMMDeviceEnumerator::EnumAudioEndpoints failed");
     }
 
     UINT renderDeviceCount;
-    if (!SUCCEEDED(mmRenderDeviceCollection->GetCount(&renderDeviceCount))) {
+    result = mmRenderDeviceCollection->GetCount(&renderDeviceCount);
+    if (FAILED(result)) {
         mmRenderDeviceCollection->Release();
         throw std::runtime_error("IMMDeviceCollection::GetCount failed");
     }
 
     for (UINT i = 0; i < renderDeviceCount; i += 1) {
         IMMDevice* mmDevice;
-        if (!SUCCEEDED(mmRenderDeviceCollection->Item(i, &mmDevice))) {
+        result = mmRenderDeviceCollection->Item(i, &mmDevice);
+        if (FAILED(result)) {
             mmRenderDeviceCollection->Release();
             throw std::runtime_error("IMMDeviceCollection::Item failed");
         }
@@ -49,26 +54,30 @@ WASAPIInstance::WASAPIInstance() {
             mmRenderDeviceCollection->Release();
             throw err;
         }
-
+         
+        _adapters.push_back(adapter);
         adopt(adapter->IInterface::queryInterface<IChild>());
     }
 
     mmRenderDeviceCollection->Release();
 
     IMMDeviceCollection* mmCaptureDeviceCollection;
-    if (!SUCCEEDED(_mmDeviceEnumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED, &mmCaptureDeviceCollection))) {
+    result = _mmDeviceEnumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &mmCaptureDeviceCollection);
+    if (FAILED(result)) {
         throw std::runtime_error("IMMDeviceEnumerator::EnumAudioEndpoints failed");
     }
 
     UINT captureDeviceCount;
-    if (!SUCCEEDED(mmCaptureDeviceCollection->GetCount(&captureDeviceCount))) {
+    result = mmCaptureDeviceCollection->GetCount(&captureDeviceCount);
+    if (FAILED(result)) {
         mmCaptureDeviceCollection->Release();
         throw std::runtime_error("IMMDeviceCollection::GetCount failed");
     }
 
     for (UINT i = 0; i < captureDeviceCount; i += 1) {
         IMMDevice* mmDevice;
-        if (!SUCCEEDED(mmCaptureDeviceCollection->Item(i, &mmDevice))) {
+        result = mmCaptureDeviceCollection->Item(i, &mmDevice);
+        if (FAILED(result)) {
             mmCaptureDeviceCollection->Release();
             throw std::runtime_error("IMMDeviceCollection::Item failed");
         }
@@ -82,6 +91,7 @@ WASAPIInstance::WASAPIInstance() {
             throw err;
         }
 
+        _adapters.push_back(adapter);
         adopt(adapter->IInterface::queryInterface<IChild>());
     }
 
@@ -90,6 +100,10 @@ WASAPIInstance::WASAPIInstance() {
 
 WASAPIInstance::~WASAPIInstance() {
     ParentByVector::disownAll();
+
+    for (WASAPIAdapter* adapter : _adapters) {
+        delete adapter;
+    }
 
     _mmDeviceEnumerator->Release();
     CoUninitialize();
@@ -100,8 +114,13 @@ InstanceBackendFlags WASAPIInstance::backend() const noexcept {
     return InstanceBackendFlags::WASAPI;
 }
 
-IAdapter* WASAPIInstance::enumerateAdapters(uint32_t id) const noexcept {
-    return IParent::enumerateChildren<IAdapter>(id);
+IAdapter* WASAPIInstance::enumerateAdapters(uint32_t id, IID const& filter) const noexcept {
+    IChild* child = enumerateChildren(id, filter);
+    if (child == nullptr) {
+        return nullptr;
+    }
+
+    return child->queryInterface<IAdapter>();
 }
 
 /* IInterface */
@@ -124,6 +143,7 @@ void* WASAPIInstance::queryInterface(IID const& iid) noexcept {
 IInstance* createInstance() noexcept {
     try {
         WASAPIInstance* instance = new WASAPIInstance();
+        instance->retain();
         return instance->IInterface::queryInterface<IInstance>();
     } catch (std::runtime_error err) {
         return nullptr;

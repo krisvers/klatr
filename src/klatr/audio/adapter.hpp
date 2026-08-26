@@ -19,6 +19,8 @@ struct AdapterInfo {
     DeviceTransportType transport;
     DeviceFlowFlags flow;
     FormatFlags formats;
+    uint32_t lowestTypicalSampleRate;
+    uint32_t highestTypicalSampleRate;
     char name[128];
 };
 
@@ -29,6 +31,22 @@ public:
 
     static inline IID const& iid() noexcept {
         static IID iid = IID("a518eef9-a2cf-40a4-9dae-d1899558bf44");
+        return iid;
+    }
+};
+
+class IOutputAdapter : virtual public IAdapter {
+public:
+    static inline IID const& iid() noexcept {
+        static IID iid = IID("b10815d5-372a-47b4-bf0a-89f0fa62650f");
+        return iid;
+    }
+};
+
+class IInputAdapter : virtual public IAdapter {
+public:
+    static inline IID const& iid() noexcept {
+        static IID iid = IID("952f30e9-a3e2-4655-894e-3854f90cb7fa");
         return iid;
     }
 };

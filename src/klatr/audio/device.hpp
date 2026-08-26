@@ -13,7 +13,6 @@ namespace klatr {
 namespace audio {
 
 struct DeviceInfo {
-    DeviceChannelFlags channel;
     DeviceFlowFlags flow;
     FormatFlags format;
     uint32_t sampleRate;

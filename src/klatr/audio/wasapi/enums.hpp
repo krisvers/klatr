@@ -175,7 +175,7 @@ inline DeviceTransportType castEnum(EndpointFormFactor form) {
         case Speakers:
         case Headphones:
         case Microphone:
-            return DeviceTransportType::Network;
+            return DeviceTransportType::Integrated;
         case LineLevel:
         case SPDIF:
             return DeviceTransportType::DedicatedSoundCard;

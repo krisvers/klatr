@@ -16,9 +16,11 @@ namespace audio {
 
 namespace wasapi {
 
-/* NOTE: adapter does not publicly advertise ICollected support, but it is used for cleanup QoL */
+/* NOTE: while this implements IOutputAdapter and IInputAdapter, only
+    instances that support each flow will advertise their interfaces
+*/
 
-class WASAPIAdapter : virtual public IAdapter, virtual public CollectedByHeap, virtual public ParentByVector {
+class WASAPIAdapter : virtual public IAdapter, virtual public IOutputAdapter, virtual public IInputAdapter, virtual public ParentByVector {
 private:
     IInstance* _instance = nullptr;
     IMMDevice* _mmDevice = nullptr;
