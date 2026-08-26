@@ -20,6 +20,7 @@ WASAPIDevice::WASAPIDevice(IAdapter* adapter, IAudioClient* audioClient, DeviceI
 }
 
 WASAPIDevice::~WASAPIDevice() {
+    stop(DeviceFlowFlags::All);
     _adapter->disown(IInterface::queryInterface<IChild>());
 
     ParentByVector::disownAll();
@@ -132,12 +133,20 @@ void WASAPIDevice::getInfo(DeviceInfo* info) const noexcept {
     std::memcpy(info, &_info, sizeof(DeviceInfo));
 }
 
-bool WASAPIDevice::start() noexcept {
+bool WASAPIDevice::start(DeviceFlowFlags flow) noexcept {
+    if ((flow & _info.flow) == DeviceFlowFlags::None) {
+        return false;
+    }
+
     HRESULT result = _audioClient->Start();
     return SUCCEEDED(result);
 }
 
-bool WASAPIDevice::stop() noexcept {
+bool WASAPIDevice::stop(DeviceFlowFlags flow) noexcept {
+    if ((flow & _info.flow) == DeviceFlowFlags::None) {
+        return false;
+    }
+
     HRESULT result = _audioClient->Stop();
     return SUCCEEDED(result);
 }

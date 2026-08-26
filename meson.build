@@ -75,7 +75,7 @@ if host_machine.system() == 'windows'
     ]
 elif host_machine.system() == 'darwin'
     klatr_platform_specific_dependencies = [
-        dependency('appleframeworks', modules: [ 'CoreAudio' ])
+        dependency('appleframeworks', modules: [ 'CoreAudio', 'CoreFoundation', 'AudioUnit' ])
     ]
 elif host_machine.system() == 'linux'
     klatr_platform_specific_dependencies = [

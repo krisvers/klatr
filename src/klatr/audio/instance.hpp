@@ -17,11 +17,23 @@ class IInstance : virtual public IAudioElement, virtual public ICollected, virtu
 public:
     virtual InstanceBackendFlags backend() const noexcept = 0;
     virtual IAdapter* enumerateAdapters(uint32_t id, IID const& filter = IAdapter::iid()) const noexcept = 0;
+    virtual IAdapter* defaultAdapter(DeviceFlowFlags flow) const noexcept = 0;
 
     template<typename T>
     inline T* enumerateAdapters(uint32_t id) const noexcept {
         static_assert(std::is_base_of<IAdapter, T>::value, "T must inherit from IAdapter");
         return enumerateAdapters(id, T::iid())->template queryInterface<T>();
+    }
+
+    template<typename T>
+    inline T* defaultAdapter(DeviceFlowFlags flow) const noexcept {
+        static_assert(std::is_base_of<IAdapter, T>::value, "T must inherit from IAdapter");
+        IAdapter* adapter = defaultAdapter(flow);
+        if (adapter == nullptr) {
+            return nullptr;
+        }
+
+        return adapter->queryInterface<T>();
     }
 
     static inline IID const& iid() noexcept {

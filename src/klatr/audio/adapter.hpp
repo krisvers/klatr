@@ -18,6 +18,7 @@ struct AdapterInfo {
     DeviceChannelFlags channels;
     DeviceTransportType transport;
     DeviceFlowFlags flow;
+    DeviceFlowFlags defaultForFlow;
     FormatFlags formats;
     uint32_t lowestTypicalSampleRate;
     uint32_t highestTypicalSampleRate;

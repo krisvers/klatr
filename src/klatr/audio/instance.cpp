@@ -31,6 +31,12 @@ InstanceBackendFlags querySupportedInstanceBackends() noexcept {
 }
 
 IInstance* createInstance(InstanceBackendFlags backends) noexcept {
+    backends &= querySupportedInstanceBackends();
+    if (backends == InstanceBackendFlags::None) {
+        /* TODO: */
+        return nullptr;
+    }
+
     if ((backends & InstanceBackendFlags::WASAPI) != InstanceBackendFlags::None) {
         IInstance* instance = wasapi::createInstance();
         if (instance != nullptr) {

@@ -42,8 +42,8 @@ public:
     /* IDevice */
     void getInfo(DeviceInfo* info) const noexcept override;
 
-    bool start() noexcept override;
-    bool stop() noexcept override;
+    bool start(DeviceFlowFlags flow) noexcept override;
+    bool stop(DeviceFlowFlags flow) noexcept override;
 
     uint32_t currentPadding() const noexcept override;
 

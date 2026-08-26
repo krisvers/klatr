@@ -62,13 +62,16 @@ enum class DeviceTransportType : uint32_t {
     DedicatedSoundCard = 3,
     Network = 4,
     Bluetooth = 5,
-    Other = 6,
+    MiscWireless = 6,
+    Other = 7,
 };
 
 enum class DeviceFlowFlags : uint32_t {
     None = 0x0000,
     Output = 0x0001,
     Input = 0x0002,
+
+    All = Output | Input,
 };
 
 KLATR_DEFINE_ENUM_BITFLAGS_OPERATORS(DeviceFlowFlags)

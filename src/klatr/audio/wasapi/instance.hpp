@@ -30,6 +30,7 @@ public:
     /* IInstance */
     InstanceBackendFlags backend() const noexcept override;
     IAdapter* enumerateAdapters(uint32_t id, IID const& filter) const noexcept override;
+    IAdapter* defaultAdapter(DeviceFlowFlags flow) const noexcept override;
 
     /* IInterface */
     void* queryInterface(IID const& iid) noexcept override;

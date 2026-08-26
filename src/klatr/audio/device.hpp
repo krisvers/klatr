@@ -24,8 +24,8 @@ class IDevice : virtual public IAudioElement, virtual public ICollected, virtual
 public:
     virtual void getInfo(DeviceInfo* info) const noexcept = 0;
 
-    virtual bool start() noexcept = 0;
-    virtual bool stop() noexcept = 0;
+    virtual bool start(DeviceFlowFlags flow) noexcept = 0;
+    virtual bool stop(DeviceFlowFlags flow) noexcept = 0;
 
     virtual uint32_t currentPadding() const noexcept = 0;
 
