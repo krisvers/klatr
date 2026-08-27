@@ -58,6 +58,33 @@ klatr_sources = [
     'src/klatr/audio/alsa/adapter.hpp', 'src/klatr/audio/alsa/adapter.cpp',
     'src/klatr/audio/alsa/device.hpp', 'src/klatr/audio/alsa/device.cpp',
     'src/klatr/audio/alsa/buffer.hpp', 'src/klatr/audio/alsa/buffer.cpp',
+
+    # klatr gpu
+    'src/klatr/gpu/gpu.hpp',
+    'src/klatr/gpu/context.hpp', 'src/klatr/gpu/context.cpp',
+
+    # klatr gpu audio
+    'src/klatr/gpu/audio/endpoint.hpp', 'src/klatr/gpu/audio/endpoint.cpp',
+    'src/klatr/gpu/audio/graph.hpp', 'src/klatr/gpu/audio/graph.cpp',
+    'src/klatr/gpu/audio/module.hpp', 'src/klatr/gpu/audio/module.cpp',
+
+    # klatr gpu audio sdk
+    'src/klatr/gpu/audio/sdk/glsl.hpp',
+    'src/klatr/gpu/audio/sdk/hlsl.hpp',
+
+    # klatr gpu graphics
+    'src/klatr/gpu/graphics/sprite.hpp', 'src/klatr/gpu/graphics/sprite.cpp',
+    'src/klatr/gpu/graphics/text.hpp', 'src/klatr/gpu/graphics/text.cpp',
+
+    # klatr gpu shader
+    'src/klatr/gpu/shader/compiler.hpp', 'src/klatr/gpu/shader/compiler.cpp',
+    'src/klatr/gpu/shader/shader.hpp', 'src/klatr/gpu/shader/shader.cpp',
+
+    # klatr ui
+    'src/klatr/ui/ui.hpp', 'src/klatr/ui/ui.cpp',
+
+    # klatr window
+    'src/klatr/window/window.hpp', 'src/klatr/window/window.cpp',
 ]
 
 klatr_includes = include_directories('src')
