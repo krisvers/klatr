@@ -28,7 +28,7 @@ private:
     AdapterInfo _info = {};
 
 public:
-    WASAPIAdapter(IInstance* instance, IMMDevice* mmDevice, DeviceFlowFlags flow);
+    WASAPIAdapter(IInstance* instance, IMMDevice* mmDevice, DeviceFlowFlags flow, DeviceFlowFlags defaultForFlow);
     ~WASAPIAdapter();
 
     /* IAdapter */

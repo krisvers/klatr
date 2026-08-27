@@ -38,6 +38,14 @@ WASAPIInstance::WASAPIInstance() {
         throw std::runtime_error("IMMDeviceCollection::GetCount failed");
     }
 
+    LPWSTR defaultMMRenderDeviceID = nullptr;
+    IMMDevice* defaultMMRenderDevice = nullptr;
+    result = _mmDeviceEnumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &defaultMMRenderDevice);
+    if (SUCCEEDED(result)) {
+        defaultMMRenderDevice->GetId(&defaultMMRenderDeviceID);
+        defaultMMRenderDevice->Release();
+    }
+
     for (UINT i = 0; i < renderDeviceCount; i += 1) {
         IMMDevice* mmDevice;
         result = mmRenderDeviceCollection->Item(i, &mmDevice);
@@ -46,9 +54,19 @@ WASAPIInstance::WASAPIInstance() {
             throw std::runtime_error("IMMDeviceCollection::Item failed");
         }
 
+        bool isDefault = false;
+        if (defaultMMRenderDeviceID != nullptr) {
+            LPWSTR deviceID = nullptr;
+            result = mmDevice->GetId(&deviceID);
+            if (SUCCEEDED(result)) {
+                isDefault = (CompareStringW(LOCALE_CUSTOM_UNSPECIFIED, 0, deviceID, wcslen(deviceID), defaultMMRenderDeviceID, wcslen(defaultMMRenderDeviceID)) == CSTR_EQUAL);
+                CoTaskMemFree(deviceID);
+            }
+        }
+
         WASAPIAdapter* adapter;
         try {
-            adapter = new WASAPIAdapter(this, mmDevice, DeviceFlowFlags::Output);
+            adapter = new WASAPIAdapter(this, mmDevice, DeviceFlowFlags::Output, (isDefault ? DeviceFlowFlags::Output : DeviceFlowFlags::None));
         } catch (std::runtime_error err) {
             for (WASAPIAdapter* adapter : _adapters) {
                 delete adapter;
@@ -61,6 +79,11 @@ WASAPIInstance::WASAPIInstance() {
 
         _adapters.push_back(adapter);
         adopt(adapter->IInterface::queryInterface<IChild>());
+    }
+
+    if (defaultMMRenderDeviceID != nullptr) {
+        CoTaskMemFree(defaultMMRenderDeviceID);
+        defaultMMRenderDeviceID = nullptr;
     }
 
     mmRenderDeviceCollection->Release();
@@ -86,6 +109,14 @@ WASAPIInstance::WASAPIInstance() {
         throw std::runtime_error("IMMDeviceCollection::GetCount failed");
     }
 
+    LPWSTR defaultMMCaptureDeviceID = nullptr;
+    IMMDevice* defaultMMCaptureDevice = nullptr;
+    result = _mmDeviceEnumerator->GetDefaultAudioEndpoint(eCapture, eMultimedia, &defaultMMCaptureDevice);
+    if (SUCCEEDED(result)) {
+        defaultMMCaptureDevice->GetId(&defaultMMCaptureDeviceID);
+        defaultMMCaptureDevice->Release();
+    }
+
     for (UINT i = 0; i < captureDeviceCount; i += 1) {
         IMMDevice* mmDevice;
         result = mmCaptureDeviceCollection->Item(i, &mmDevice);
@@ -98,9 +129,19 @@ WASAPIInstance::WASAPIInstance() {
             throw std::runtime_error("IMMDeviceCollection::Item failed");
         }
 
+        bool isDefault = false;
+        if (defaultMMCaptureDeviceID != nullptr) {
+            LPWSTR deviceID = nullptr;
+            result = mmDevice->GetId(&deviceID);
+            if (SUCCEEDED(result)) {
+                isDefault = (CompareStringW(LOCALE_CUSTOM_UNSPECIFIED, 0, deviceID, wcslen(deviceID), defaultMMCaptureDeviceID, wcslen(defaultMMCaptureDeviceID)) == CSTR_EQUAL);
+                CoTaskMemFree(deviceID);
+            }
+        }
+
         WASAPIAdapter* adapter;
         try {
-            adapter = new WASAPIAdapter(this, mmDevice, DeviceFlowFlags::Input);
+            adapter = new WASAPIAdapter(this, mmDevice, DeviceFlowFlags::Input, (isDefault ? DeviceFlowFlags::Input : DeviceFlowFlags::None));
         } catch (std::runtime_error err) {
             for (WASAPIAdapter* adapter : _adapters) {
                 delete adapter;
@@ -113,6 +154,11 @@ WASAPIInstance::WASAPIInstance() {
 
         _adapters.push_back(adapter);
         adopt(adapter->IInterface::queryInterface<IChild>());
+    }
+
+    if (defaultMMCaptureDeviceID != nullptr) {
+        CoTaskMemFree(defaultMMCaptureDeviceID);
+        defaultMMCaptureDeviceID = nullptr;
     }
 
     mmCaptureDeviceCollection->Release();
@@ -143,7 +189,7 @@ IAdapter* WASAPIInstance::enumerateAdapters(uint32_t id, IID const& filter) cons
     return child->queryInterface<IAdapter>();
 }
 
-IAdapter* CoreAudioInstance::defaultAdapter(DeviceFlowFlags flow) const noexcept {
+IAdapter* WASAPIInstance::defaultAdapter(DeviceFlowFlags flow) const noexcept {
     for (uint32_t id = 0; true; id += 1) {
         IAdapter* adapter = enumerateAdapters(id, IAdapter::iid());
         if (adapter == nullptr) {

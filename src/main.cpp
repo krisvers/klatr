@@ -48,6 +48,10 @@ int main(int argc, char** argv) {
             inputBuffer = nullptr;
         }
 
+        if (inputBuffer != nullptr && outputBuffer == nullptr) {
+            std::printf("Input available: %u frames, output busy\n", inputBuffer->frameCount());
+        }
+
         if (outputBuffer != nullptr) {
             float* output = reinterpret_cast<float*>(outputBuffer->map());
             if (inputBuffer != nullptr) {
@@ -56,16 +60,18 @@ int main(int argc, char** argv) {
 
                 float* input = reinterpret_cast<float*>(inputBuffer->map());
 
-                uint32_t frames = std::min(inputAvailableFrames, outputAvailableFrames) * 4 * 2;
-                std::memcpy(&output[outputDevice->currentPadding() * 2], input, frames);
+                uint32_t frames = std::min(inputAvailableFrames, outputAvailableFrames);
+                uint32_t bytes = frames * 4 * 2;
+                std::memcpy(&output[outputDevice->currentPadding() * 2], input, bytes);
 
-                outputBuffer->produce(outputBuffer->frameCount());
+                outputBuffer->produce(frames);
                 inputBuffer->unmap();
+                inputBuffer->consume();
             } else {
                 constexpr float pi = 3.14159265358979323846f;
 
                 float f = 480.0f;
-                for (uint32_t i = 0; i < 400; i += 1) {
+                for (uint32_t i = 0; i < 100; i += 1) {
                     float t = static_cast<float>(i) / 48000.0f;
                     float v = std::sinf(2.0f * pi * f * t);
                     for (uint32_t ch = 0; ch < 2; ch += 1) {
@@ -73,7 +79,7 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                outputBuffer->produce(400);
+                //outputBuffer->produce(100);
             }
 
             outputBuffer->unmap();
@@ -81,7 +87,6 @@ int main(int argc, char** argv) {
         }
 
         if (inputBuffer != nullptr) {
-            inputBuffer->consume();
             inputBuffer->release();
         }
     }

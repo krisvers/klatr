@@ -17,7 +17,7 @@ namespace audio {
 
 namespace wasapi {
 
-WASAPIAdapter::WASAPIAdapter(IInstance* instance, IMMDevice* mmDevice, DeviceFlowFlags flow) : _instance(instance), _mmDevice(mmDevice) {
+WASAPIAdapter::WASAPIAdapter(IInstance* instance, IMMDevice* mmDevice, DeviceFlowFlags flow, DeviceFlowFlags defaultForFlow) : _instance(instance), _mmDevice(mmDevice) {
     LPWSTR adapterID;
     assert(SUCCEEDED(mmDevice->GetId(&adapterID)));
 
@@ -57,6 +57,7 @@ WASAPIAdapter::WASAPIAdapter(IInstance* instance, IMMDevice* mmDevice, DeviceFlo
     assert(SUCCEEDED(PropVariantClear(&formFactorProp)));
 
     _info.flow = flow;
+    _info.defaultForFlow = defaultForFlow;
 
     IAudioClient* dummyClient;
     HRESULT result = mmDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&dummyClient));

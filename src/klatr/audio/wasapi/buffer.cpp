@@ -2,6 +2,8 @@
 
 #ifdef KLATR_AUDIO_BACKEND_WASAPI
 
+#include <cassert>
+
 #include <klatr/audio/wasapi/wasapi.hpp>
 
 namespace klatr {
@@ -17,7 +19,8 @@ WASAPIOutputBuffer::WASAPIOutputBuffer(IDevice* device, IAudioRenderClient* audi
 WASAPIOutputBuffer::~WASAPIOutputBuffer() {
     _device->disown(IInterface::queryInterface<IChild>());
 
-    _audioRenderClient->ReleaseBuffer(_producedFrameCount, (_silent ? AUDCLNT_BUFFERFLAGS_SILENT : 0));
+    HRESULT result = _audioRenderClient->ReleaseBuffer(_producedFrameCount, (_silent ? AUDCLNT_BUFFERFLAGS_SILENT : 0));
+    assert(SUCCEEDED(result));
 
     _device->release();
 }
@@ -79,7 +82,8 @@ WASAPIInputBuffer::WASAPIInputBuffer(IDevice* device, IAudioCaptureClient* audio
 WASAPIInputBuffer::~WASAPIInputBuffer() {
     _device->disown(IInterface::queryInterface<IChild>());
 
-    _audioCaptureClient->ReleaseBuffer(_consumed ? _frameCount : 0);
+    HRESULT result = _audioCaptureClient->ReleaseBuffer(_consumed ? _frameCount : 0);
+    assert(SUCCEEDED(result));
 
     _device->release();
 }
