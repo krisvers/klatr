@@ -13,7 +13,7 @@ using IID = kom::IID;
 class IBase : virtual public IInterface {
 public:
     static inline IID const& iid() noexcept {
-        static IID iid = IID("0c7b1d80-59bf-4da8-9f9f-e9620747b596");
+        static IID iid = IID("2ed7e7ab-a707-46f4-9aab-b909284ae2a0");
         return iid;
     }
 };
@@ -24,7 +24,7 @@ public:
     virtual uint32_t release() = 0;
 
     static inline IID const& iid() noexcept {
-        static IID iid = IID("d1ebd19c-1149-4868-8f0f-e6881b3f2232");
+        static IID iid = IID("7cb3df2e-c1ac-46cc-ae37-230028240c71");
         return iid;
     }
 };
@@ -44,7 +44,7 @@ public:
     }
 
     static inline IID const& iid() noexcept {
-        static IID iid = IID("a2efda53-8b1e-4d47-85f1-2789b915a03b");
+        static IID iid = IID("cc89508d-31ab-407f-afe0-65cd46153adb");
         return iid;
     }
 };
@@ -59,7 +59,7 @@ public:
     }
 
     static inline IID const& iid() noexcept {
-        static IID iid = IID("589186c1-6270-4cea-a31f-f46be34292b4");
+        static IID iid = IID("f34e169f-0084-49a4-9835-17282be77424");
         return iid;
     }
 };
