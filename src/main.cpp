@@ -1,8 +1,17 @@
 #include <klatr/audio/instance.hpp>
 #include <klatr/audio/adapter.hpp>
 
+#include <klatr/gpu/context.hpp>
+
 #include <cassert>
 
+int main(int argc, char** argv) {
+    klatr::gpu::Context gpuContext = klatr::gpu::Context(true);
+
+    return 0;
+}
+
+/*
 int main(int argc, char** argv) {
     klatr::audio::IInstance* instance = klatr::audio::createInstance(klatr::audio::InstanceBackendFlags::Any);
     assert(instance != nullptr);
@@ -23,7 +32,7 @@ int main(int argc, char** argv) {
     deviceInfo.flow = klatr::audio::DeviceFlowFlags::Input;
     deviceInfo.format = klatr::audio::FormatFlags::Float32;
     deviceInfo.sampleRate = inputAdapterInfo.highestTypicalSampleRate;
-    deviceInfo.sampleCount = inputAdapterInfo.highestTypicalSampleRate / 100 * 2; /* ~10 ms of audio */
+    deviceInfo.sampleCount = inputAdapterInfo.highestTypicalSampleRate / 100 * 2;
 
     klatr::audio::IInputDevice* inputDevice = inputAdapter->createDevice(&deviceInfo)->queryInterface<klatr::audio::IInputDevice>();
     assert(inputDevice != nullptr);
@@ -32,7 +41,7 @@ int main(int argc, char** argv) {
     deviceInfo.flow = klatr::audio::DeviceFlowFlags::Output;
     deviceInfo.format = klatr::audio::FormatFlags::Float32;
     deviceInfo.sampleRate = outputAdapterInfo.highestTypicalSampleRate;
-    deviceInfo.sampleCount = outputAdapterInfo.highestTypicalSampleRate / 100 * 2; /* ~10 ms of audio */
+    deviceInfo.sampleCount = outputAdapterInfo.highestTypicalSampleRate / 100 * 2;
 
     klatr::audio::IOutputDevice* outputDevice = outputAdapter->createDevice(&deviceInfo)->queryInterface<klatr::audio::IOutputDevice>();
     assert(outputDevice != nullptr);
@@ -99,3 +108,4 @@ int main(int argc, char** argv) {
     instance->release();
     return 0;
 }
+*/

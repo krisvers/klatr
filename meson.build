@@ -1,7 +1,7 @@
 project('klatr',
     [ 'c', 'cpp' ],
     license: 'MIT',
-    version: '0.0.2',
+    version: '0.0.5',
     default_options: [ 'cpp_std=c++17' ]
 )
 
@@ -9,7 +9,7 @@ vkom_subproject = subproject('vkom')
 kom_subproject = subproject('kom')
 sdl3_subproject = subproject('sdl3')
 
-vkom = dependency('vkom', version: '0.1.2', required: true)
+vkom = dependency('vkom', version: '0.1.5', required: true)
 kom = dependency('kom', version: '1.0.1', required: true)
 sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
 
@@ -82,9 +82,6 @@ klatr_sources = [
 
     # klatr ui
     'src/klatr/ui/ui.hpp', 'src/klatr/ui/ui.cpp',
-
-    # klatr window
-    'src/klatr/window/window.hpp', 'src/klatr/window/window.cpp',
 ]
 
 klatr_includes = include_directories('src')
