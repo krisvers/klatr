@@ -55,7 +55,7 @@ void Context::vkomWSIInfoFromSDLWindow(SDL_Window* window, vkom::SurfaceWSIInfo*
 
     #ifdef VKOM_PLATFORM_FAMILY_NT
     wsiInfo->type = vkom::SurfaceWSIType::Win32;
-    wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(_window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
     #elif defined(VKOM_PLATFORM_FAMILY_APPLE)
     void* view = SDL_GetPointerProperty(SDL_GetWindowProperties(window), KLATR_GPU_CONTEXT_SDL_WINDOW_METAL_VIEW_PROP, nullptr);
     if (view == nullptr) {
@@ -69,12 +69,12 @@ void Context::vkomWSIInfoFromSDLWindow(SDL_Window* window, vkom::SurfaceWSIInfo*
     const char* videoDriver = SDL_GetCurrentVideoDriver();
     if (std::strcmp(videoDriver, "x11") == 0) {
         wsiInfo->type = vkom::SurfaceSurfaceWSIType::Xlib;
-        wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(_window), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, nullptr));
-        wsiInfo->displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(_window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+        wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, nullptr));
+        wsiInfo->displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
     } else if (std::strcmp(videoDriver, "wayland") == 0) {
         wsiInfo->type = vkom::SurfaceSurfaceWSIType::Wayland;
-        wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(_window), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr));
-        wsiInfo->displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(_window), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr));
+        wsiInfo->windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr));
+        wsiInfo->displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr));
     }
     #endif
 }

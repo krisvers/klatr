@@ -15,9 +15,9 @@ namespace audio {
 namespace wasapi {
 
 WASAPIInstance::WASAPIInstance() {
-    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HRESULT result = CoInitialize(nullptr);
     if (FAILED(result)) {
-        throw std::runtime_error("CoInitializeEx failed");
+        throw std::runtime_error("CoInitialize failed");
     }
 
     result = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&_mmDeviceEnumerator));

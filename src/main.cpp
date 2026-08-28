@@ -3,10 +3,282 @@
 
 #include <klatr/gpu/context.hpp>
 
+#include <SDL3/SDL.h>
+
+#include <bitset>
+#include <fstream>
 #include <cassert>
+
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 64
+
+struct UniformAudioBufferDescriptor {
+    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
+    uint32_t count;
+};
+
+struct PushConstantAudioBufferDescriptor {
+    uint64_t address;
+    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
+    uint32_t count;
+};
+
+/* adapted from old test code from krisvers/vkom */
+std::vector<uint32_t> loadFile(const char* path) {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in.good()) {
+        return {};
+    }
+
+    size_t byteSize = in.tellg();
+    if (byteSize % 4 != 0) {
+        in.close();
+        return {};
+    }
+
+    std::vector<uint32_t> code(byteSize / 4);
+    in.seekg(0, std::ios::beg);
+
+    if (!in.read(reinterpret_cast<char*>(&code[0]), byteSize)) {
+        in.close();
+        return {};
+    }
+
+    in.close();
+    return code;
+}
 
 int main(int argc, char** argv) {
     klatr::gpu::Context gpuContext = klatr::gpu::Context(true);
+    gpuContext.instance->setLogCallback([](vkom::IInstance* instance, void* userData, vkom::DebugMessageSeverityFlags severity, vkom::DebugMessageTypeFlags types, const char* message) {
+        std::printf("[vkom]: %s\n", message);
+    }, nullptr);
+
+    assert(SDL_Init(SDL_INIT_VIDEO));
+
+    SDL_Window* mainWindow = SDL_CreateWindow("klatr | main", 1200, 800, 0);
+    assert(mainWindow != nullptr);
+
+    vkom::IHeap* cpuEndpointBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuEndpointBufferHeap) == vkom::Result::Success);
+
+    vkom::IHeap* gpuTransientBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::GPU, &gpuTransientBufferHeap) == vkom::Result::Success);
+
+    vkom::IHeap* cpuUniformBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::UniformBuffer, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuUniformBufferHeap) == vkom::Result::Success);
+
+    vkom::DescriptorBindingInfo moduleDescriptorSetLayoutBindingInfos[2] = {};
+    moduleDescriptorSetLayoutBindingInfos[0].binding = 0;
+    moduleDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
+    moduleDescriptorSetLayoutBindingInfos[0].count = 1;
+    moduleDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
+    moduleDescriptorSetLayoutBindingInfos[1].binding = 1;
+    moduleDescriptorSetLayoutBindingInfos[1].flags = vkom::DescriptorFlags::StorageBuffer;
+    moduleDescriptorSetLayoutBindingInfos[1].count = 1;
+    moduleDescriptorSetLayoutBindingInfos[1].stages = vkom::ShaderStageFlags::Compute;
+
+    vkom::DescriptorSetLayoutInfo moduleDescriptorSetLayoutInfo = {};
+    moduleDescriptorSetLayoutInfo.bindingCount = 2;
+    moduleDescriptorSetLayoutInfo.bindings = &moduleDescriptorSetLayoutBindingInfos[0];
+
+    vkom::IDescriptorSetLayout* moduleDescriptorSetLayout;
+    assert(gpuContext.device->createDescriptorSetLayout(&moduleDescriptorSetLayoutInfo, &moduleDescriptorSetLayout) == vkom::Result::Success);
+
+    vkom::DescriptorPoolDescriptorInfo moduleDescriptorPoolDescriptorInfos[2] = {};
+    moduleDescriptorPoolDescriptorInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
+    moduleDescriptorPoolDescriptorInfos[0].count = 1;
+    moduleDescriptorPoolDescriptorInfos[1].flags = vkom::DescriptorFlags::StorageBuffer;
+    moduleDescriptorPoolDescriptorInfos[1].count = 1;
+
+    vkom::DescriptorPoolInfo moduleDescriptorPoolInfo = {};
+    moduleDescriptorPoolInfo.maxDescriptorSets = 1;
+    moduleDescriptorPoolInfo.descriptorCount = 2;
+    moduleDescriptorPoolInfo.descriptors = &moduleDescriptorPoolDescriptorInfos[0];
+
+    vkom::IDescriptorPool* moduleDescriptorPool;
+    assert(gpuContext.device->createDescriptorPool(&moduleDescriptorPoolInfo, &moduleDescriptorPool) == vkom::Result::Success);
+
+    vkom::IDescriptorSet* moduleDescriptorSet;
+    assert(moduleDescriptorPool->allocateDescriptorSets(moduleDescriptorSetLayout, 1, &moduleDescriptorSet) == vkom::Result::Success);
+
+    vkom::PushConstantRange modulePipelineLayoutPushConstantRanges[1] = {};
+    modulePipelineLayoutPushConstantRanges[0].offset = 0;
+    modulePipelineLayoutPushConstantRanges[0].size = sizeof(PushConstantAudioBufferDescriptor);
+    modulePipelineLayoutPushConstantRanges[0].stages = vkom::ShaderStageFlags::Compute;
+
+    vkom::PipelineLayoutInfo modulePipelineLayoutInfo = {};
+    modulePipelineLayoutInfo.descriptorSetLayoutCount = 1;
+    modulePipelineLayoutInfo.descriptorSetLayouts = &moduleDescriptorSetLayout;
+    modulePipelineLayoutInfo.pushConstantRangeCount = 1;
+    modulePipelineLayoutInfo.pushConstantRanges = &modulePipelineLayoutPushConstantRanges[0];
+
+    vkom::IPipelineLayout* modulePipelineLayout;
+    assert(gpuContext.device->createPipelineLayout(&modulePipelineLayoutInfo, &modulePipelineLayout) == vkom::Result::Success);
+
+    std::vector<uint32_t> moduleShaderSPIRV = loadFile("module.hlsl.spv");
+    assert(!moduleShaderSPIRV.empty());
+
+    vkom::ShaderModuleInfo moduleShaderInfo = {};
+    moduleShaderInfo.length = moduleShaderSPIRV.size();
+    moduleShaderInfo.spirv = &moduleShaderSPIRV[0];
+
+    vkom::IShaderModule* moduleShader;
+    assert(gpuContext.device->createShaderModule(&moduleShaderInfo, &moduleShader) == vkom::Result::Success);
+
+    vkom::ComputePipelineInfo modulePipelineInfo = {};
+    modulePipelineInfo.shaderInfo.shader = moduleShader;
+    modulePipelineInfo.shaderInfo.stage = vkom::ShaderStageFlags::Compute;
+    modulePipelineInfo.shaderInfo.entry = "module";
+
+    vkom::IComputePipeline* modulePipeline;
+    assert(gpuContext.device->createComputePipeline(&modulePipelineInfo, nullptr, modulePipelineLayout, &modulePipeline) == vkom::Result::Success);
+
+    vkom::IFence* batchFinishedFence;
+    assert(gpuContext.device->acquireFence(false, &batchFinishedFence) == vkom::Result::Success);
+
+    vkom::BufferInfo cpuEndpointBufferInfo = {};
+    cpuEndpointBufferInfo.size = sizeof(float) * INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+    cpuEndpointBufferInfo.usage = vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress;
+    cpuEndpointBufferInfo.location = vkom::MemoryLocationFlags::CPU;
+
+    vkom::IBuffer* cpuEndpointBuffer;
+    assert(cpuEndpointBufferHeap->createBuffer(&cpuEndpointBufferInfo, &cpuEndpointBuffer) == vkom::Result::Success);
+
+    vkom::BufferViewInfo cpuEndpointBufferViewInfo = {};
+    cpuEndpointBufferViewInfo.offset = 0;
+    cpuEndpointBufferViewInfo.range = cpuEndpointBufferInfo.size;
+
+    vkom::IBufferView* cpuEndpointBufferView;
+    assert(cpuEndpointBuffer->createView(&cpuEndpointBufferViewInfo, &cpuEndpointBufferView) == vkom::Result::Success);
+
+    vkom::IStorageBuffer* cpuEndpointBufferSSBO = cpuEndpointBuffer->queryInterface<vkom::IStorageBuffer>();
+    assert(cpuEndpointBufferSSBO != nullptr);
+
+    vkom::IDeviceAddressBuffer* cpuEndpointBufferDA = cpuEndpointBuffer->queryInterface<vkom::IDeviceAddressBuffer>();
+    assert(cpuEndpointBufferDA != nullptr);
+
+    vkom::BufferInfo cpuUniformBufferInfo = {};
+    cpuUniformBufferInfo.size = sizeof(UniformAudioBufferDescriptor);
+    cpuUniformBufferInfo.usage = vkom::BufferUsageFlags::UniformBuffer;
+    cpuUniformBufferInfo.location = vkom::MemoryLocationFlags::CPU;
+
+    vkom::IBuffer* cpuUniformBuffer;
+    assert(cpuUniformBufferHeap->createBuffer(&cpuUniformBufferInfo, &cpuUniformBuffer) == vkom::Result::Success);
+
+    vkom::BufferViewInfo cpuUniformBufferViewInfo = {};
+    cpuUniformBufferViewInfo.offset = 0;
+    cpuUniformBufferViewInfo.range = cpuUniformBufferInfo.size;
+
+    vkom::IBufferView* cpuUniformBufferView;
+    assert(cpuUniformBuffer->createView(&cpuUniformBufferViewInfo, &cpuUniformBufferView) == vkom::Result::Success);
+
+    vkom::IUniformBuffer* cpuUniformBufferUBO = cpuUniformBuffer->queryInterface<vkom::IUniformBuffer>();
+    assert(cpuUniformBufferUBO != nullptr);
+
+    klatr::audio::IInstance* instance = klatr::audio::createInstance(klatr::audio::InstanceBackendFlags::Any);
+    assert(instance != nullptr);
+
+    klatr::audio::IOutputAdapter* outputAdapter = instance->defaultAdapter<klatr::audio::IOutputAdapter>(klatr::audio::DeviceFlowFlags::Output);
+    assert(outputAdapter != nullptr);
+
+    klatr::audio::AdapterInfo outputAdapterInfo = {};
+    outputAdapter->getInfo(&outputAdapterInfo);
+
+    klatr::audio::DeviceInfo outputDeviceInfo = {};
+    outputDeviceInfo.format = klatr::audio::FormatFlags::Float32;
+    outputDeviceInfo.flow = klatr::audio::DeviceFlowFlags::Output;
+    outputDeviceInfo.sampleRate = 48000;
+    outputDeviceInfo.sampleCount = 4800; // 100 ms of audio
+
+    klatr::audio::IOutputDevice* outputDevice = outputAdapter->createDevice(&outputDeviceInfo)->queryInterface<klatr::audio::IOutputDevice>();
+    assert(outputDevice != nullptr);
+
+    uint32_t outputDeviceChannelCount = std::bitset<32>(static_cast<std::underlying_type_t<klatr::audio::DeviceChannelFlags>>(outputAdapterInfo.channels)).count();
+
+    bool running = true;
+    while (running) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+                case SDL_EVENT_QUIT:
+                    running = false;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
+        vkom::IResourceView* cpuEndpointBufferResourceView = cpuEndpointBufferView->queryInterface<vkom::IResourceView>();
+
+        vkom::DescriptorWrite moduleDescriptorSetWrites[2] = {};
+        moduleDescriptorSetWrites[0].binding = 0;
+        moduleDescriptorSetWrites[0].element = 0;
+        moduleDescriptorSetWrites[0].count = 1;
+        moduleDescriptorSetWrites[0].views = &cpuUniformBufferResourceView;
+        moduleDescriptorSetWrites[1].binding = 1;
+        moduleDescriptorSetWrites[1].element = 0;
+        moduleDescriptorSetWrites[1].count = 1;
+        moduleDescriptorSetWrites[1].views = &cpuEndpointBufferResourceView;
+
+        moduleDescriptorSet->write(2, &moduleDescriptorSetWrites[0]);
+
+        vkom::ICommandEncoder* encoder;
+        assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
+
+        vkom::ComputePassDescriptor cpDescriptor = {};
+
+        vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
+        assert(cp != nullptr);
+
+        cp->bindPipeline(modulePipeline);
+        cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
+
+        PushConstantAudioBufferDescriptor pushConstants[1] = {};
+        pushConstants[0].address = cpuEndpointBufferDA->deviceAddress();
+        pushConstants[0].bounds[0] = -1.0f;
+        pushConstants[0].bounds[1] = 1.0f;
+        pushConstants[0].count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+
+        cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants[0]);
+        cp->dispatch(INTERNAL_AUDIO_BUFFER_FRAME_COUNT, 1, 1);
+
+        cp->end();
+        cp = nullptr;
+
+        vkom::ICommandBatch* batch;
+        assert(encoder->batch(&batch) == vkom::Result::Success);
+
+        vkom::CommandBatchSubmitInfo submitInfo = {};
+        submitInfo.signalFence = batchFinishedFence;
+
+        assert(batch->submit(&submitInfo) == vkom::Result::Success);
+        assert(batchFinishedFence->wait() == vkom::Result::Success);
+        assert(batchFinishedFence->reset() == vkom::Result::Success);
+
+        /* NOTE: mixing frame counts and sample counts (modules work with individual channels as their own buffers currently) */
+        klatr::audio::IOutputBuffer* outputBuffer = outputDevice->acquireOutputBuffer(INTERNAL_AUDIO_BUFFER_FRAME_COUNT);
+        if (outputBuffer != nullptr) {
+            void* mappedEndpointBuffer = cpuEndpointBuffer->map();
+            if (mappedEndpointBuffer != nullptr) {
+                float* mappedOutputBuffer = reinterpret_cast<float*>(outputBuffer->map());
+                std::memcpy(&mappedOutputBuffer[outputDevice->currentPadding() * outputDeviceChannelCount], mappedEndpointBuffer, INTERNAL_AUDIO_BUFFER_FRAME_COUNT * sizeof(float));
+                outputBuffer->unmap();
+            } else {
+                outputBuffer->silence();
+            }
+
+            cpuEndpointBuffer->unmap();
+            outputBuffer->produce(INTERNAL_AUDIO_BUFFER_FRAME_COUNT / outputDeviceChannelCount);
+            outputBuffer->release();
+        }
+
+        batch->discard();
+        encoder->release();
+    }
+
+    SDL_DestroyWindow(mainWindow);
+    SDL_Quit();
 
     return 0;
 }
