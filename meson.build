@@ -1,7 +1,7 @@
 project('klatr',
     [ 'c', 'cpp' ],
     license: 'MIT',
-    version: '0.0.5',
+    version: '0.0.3',
     default_options: [ 'cpp_std=c++17' ]
 )
 
