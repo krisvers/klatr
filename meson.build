@@ -1,17 +1,19 @@
 project('klatr',
     [ 'c', 'cpp' ],
     license: 'MIT',
-    version: '0.0.6',
+    version: '0.1.0',
     default_options: [ 'cpp_std=c++17' ]
 )
 
 vkom_subproject = subproject('vkom')
 kom_subproject = subproject('kom')
 sdl3_subproject = subproject('sdl3')
+miniaudio_subproject = subproject('miniaudio')
 
 vkom = dependency('vkom', version: '0.1.8', required: true)
 kom = dependency('kom', version: '1.0.1', required: true)
 sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
+miniaudio = dependency('miniaudio', >=0.11.0', required: true)
 
 klatr_sources = [
     # bootstrap

@@ -9,17 +9,27 @@
 #include <fstream>
 #include <cassert>
 
-#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 64
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 16384
 
 struct UniformAudioBufferDescriptor {
     float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
     uint32_t count;
 };
 
+struct Uniforms {
+    uint64_t globalID;
+    uint32_t sampleRate;
+    UniformAudioBufferDescriptor buffer;
+};
+
 struct PushConstantAudioBufferDescriptor {
     uint64_t address;
     float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
     uint32_t count;
+};
+
+struct PushConstants {
+    PushConstantAudioBufferDescriptor buffer;
 };
 
 /* adapted from old test code from krisvers/vkom */
@@ -138,7 +148,7 @@ int main(int argc, char** argv) {
 
     vkom::BufferInfo cpuEndpointBufferInfo = {};
     cpuEndpointBufferInfo.size = sizeof(float) * INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
-    cpuEndpointBufferInfo.usage = vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress;
+    cpuEndpointBufferInfo.usage = vkom::BufferUsageFlags::TransferDestination | vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress;
     cpuEndpointBufferInfo.location = vkom::MemoryLocationFlags::CPU;
 
     vkom::IBuffer* cpuEndpointBuffer;
@@ -158,7 +168,7 @@ int main(int argc, char** argv) {
     assert(cpuEndpointBufferDA != nullptr);
 
     vkom::BufferInfo cpuUniformBufferInfo = {};
-    cpuUniformBufferInfo.size = sizeof(UniformAudioBufferDescriptor);
+    cpuUniformBufferInfo.size = sizeof(Uniforms);
     cpuUniformBufferInfo.usage = vkom::BufferUsageFlags::UniformBuffer;
     cpuUniformBufferInfo.location = vkom::MemoryLocationFlags::CPU;
 
@@ -184,16 +194,19 @@ int main(int argc, char** argv) {
     klatr::audio::AdapterInfo outputAdapterInfo = {};
     outputAdapter->getInfo(&outputAdapterInfo);
 
+    uint32_t outputDeviceChannelCount = std::bitset<32>(static_cast<std::underlying_type_t<klatr::audio::DeviceChannelFlags>>(outputAdapterInfo.channels)).count();
+
     klatr::audio::DeviceInfo outputDeviceInfo = {};
     outputDeviceInfo.format = klatr::audio::FormatFlags::Float32;
     outputDeviceInfo.flow = klatr::audio::DeviceFlowFlags::Output;
-    outputDeviceInfo.sampleRate = 48000;
-    outputDeviceInfo.sampleCount = 4800; // 100 ms of audio
+    outputDeviceInfo.sampleRate = outputAdapterInfo.highestTypicalSampleRate;
+    outputDeviceInfo.sampleCount = outputAdapterInfo.highestTypicalSampleRate / 10 * outputDeviceChannelCount;
 
     klatr::audio::IOutputDevice* outputDevice = outputAdapter->createDevice(&outputDeviceInfo)->queryInterface<klatr::audio::IOutputDevice>();
     assert(outputDevice != nullptr);
+    assert(outputDevice->start(klatr::audio::DeviceFlowFlags::Output));
 
-    uint32_t outputDeviceChannelCount = std::bitset<32>(static_cast<std::underlying_type_t<klatr::audio::DeviceChannelFlags>>(outputAdapterInfo.channels)).count();
+    uint64_t globalID = 0;
 
     bool running = true;
     while (running) {
@@ -226,6 +239,16 @@ int main(int argc, char** argv) {
         vkom::ICommandEncoder* encoder;
         assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
 
+        vkom::ITransferDestinationBuffer* cpuEndpointBufferTD = cpuEndpointBuffer->queryInterface<vkom::ITransferDestinationBuffer>();
+        assert(cpuEndpointBufferTD != nullptr);
+
+        vkom::BufferFill cpuEndpointBufferFill = {};
+        cpuEndpointBufferFill.dstOffset = 0;
+        cpuEndpointBufferFill.size = cpuEndpointBufferInfo.size;
+        cpuEndpointBufferFill.word = 0;
+
+        encoder->fillBuffer(cpuEndpointBufferTD, &cpuEndpointBufferFill);
+
         vkom::ComputePassDescriptor cpDescriptor = {};
 
         vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
@@ -234,13 +257,26 @@ int main(int argc, char** argv) {
         cp->bindPipeline(modulePipeline);
         cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
 
-        PushConstantAudioBufferDescriptor pushConstants[1] = {};
-        pushConstants[0].address = cpuEndpointBufferDA->deviceAddress();
-        pushConstants[0].bounds[0] = -1.0f;
-        pushConstants[0].bounds[1] = 1.0f;
-        pushConstants[0].count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+        Uniforms uniforms = {};
+        uniforms.globalID = globalID;
+        uniforms.sampleRate = outputDeviceInfo.sampleRate;
+        uniforms.buffer.bounds[0] = -1.0f;
+        uniforms.buffer.bounds[1] = 1.0f;
+        uniforms.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
 
-        cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants[0]);
+        std::printf("%u\n", globalID);
+
+        void* mappedUniformBuffer = cpuUniformBuffer->map();
+        std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
+        cpuUniformBuffer->unmap();
+
+        PushConstants pushConstants = {};
+        pushConstants.buffer.address = cpuEndpointBufferDA->deviceAddress();
+        pushConstants.buffer.bounds[0] = uniforms.buffer.bounds[0];
+        pushConstants.buffer.bounds[1] = uniforms.buffer.bounds[1];
+        pushConstants.buffer.count = uniforms.buffer.count;
+
+        cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants);
         cp->dispatch(INTERNAL_AUDIO_BUFFER_FRAME_COUNT, 1, 1);
 
         cp->end();
@@ -256,25 +292,32 @@ int main(int argc, char** argv) {
         assert(batchFinishedFence->wait() == vkom::Result::Success);
         assert(batchFinishedFence->reset() == vkom::Result::Success);
 
-        /* NOTE: mixing frame counts and sample counts (modules work with individual channels as their own buffers currently) */
-        klatr::audio::IOutputBuffer* outputBuffer = outputDevice->acquireOutputBuffer(INTERNAL_AUDIO_BUFFER_FRAME_COUNT);
-        if (outputBuffer != nullptr) {
-            void* mappedEndpointBuffer = cpuEndpointBuffer->map();
-            if (mappedEndpointBuffer != nullptr) {
-                float* mappedOutputBuffer = reinterpret_cast<float*>(outputBuffer->map());
-                std::memcpy(&mappedOutputBuffer[outputDevice->currentPadding() * outputDeviceChannelCount], mappedEndpointBuffer, INTERNAL_AUDIO_BUFFER_FRAME_COUNT * sizeof(float));
-                outputBuffer->unmap();
-            } else {
-                outputBuffer->silence();
-            }
-
-            cpuEndpointBuffer->unmap();
-            outputBuffer->produce(INTERNAL_AUDIO_BUFFER_FRAME_COUNT / outputDeviceChannelCount);
-            outputBuffer->release();
-        }
-
         batch->discard();
         encoder->release();
+
+        /* NOTE: mixing frame counts and sample counts (modules work with individual channels as their own buffers currently) */
+        klatr::audio::IOutputBuffer* outputBuffer = outputDevice->acquireOutputBuffer(outputDeviceInfo.sampleCount / outputDeviceChannelCount);
+        if (outputBuffer != nullptr) {
+            uint32_t outputPadding = outputDevice->currentPadding();
+            uint32_t endpointAvailableFrames = INTERNAL_AUDIO_BUFFER_FRAME_COUNT / outputDeviceChannelCount;
+            uint32_t outputAvailableFrames = outputBuffer->frameCount() - outputPadding;
+            uint32_t frames = std::min(endpointAvailableFrames, outputAvailableFrames);
+            uint64_t bytes = frames * sizeof(float) * outputDeviceChannelCount;
+
+            if (frames != 0) {
+                float* mappedEndpointBuffer = reinterpret_cast<float*>(cpuEndpointBuffer->map());
+                std::printf("%f %f %f %f\n", mappedEndpointBuffer[0], mappedEndpointBuffer[1], mappedEndpointBuffer[2], mappedEndpointBuffer[3]);
+
+                float* mappedOutputBuffer = reinterpret_cast<float*>(outputBuffer->map());
+                std::memcpy(&mappedOutputBuffer[outputPadding * outputDeviceChannelCount], mappedEndpointBuffer, bytes);
+                cpuEndpointBuffer->unmap();
+            }
+
+            globalID += frames;
+            outputBuffer->produce(frames);
+            outputBuffer->unmap();
+            outputBuffer->release();
+        }
     }
 
     SDL_DestroyWindow(mainWindow);
