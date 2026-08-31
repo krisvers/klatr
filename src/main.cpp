@@ -1,7 +1,7 @@
-#include <klatr/audio/instance.hpp>
-#include <klatr/audio/adapter.hpp>
-
 #include <klatr/gpu/context.hpp>
+
+#define MINIAUDIO_IMPLEMENTATION
+#include <miniaudio.h>
 
 #include <SDL3/SDL.h>
 
@@ -9,7 +9,7 @@
 #include <fstream>
 #include <cassert>
 
-#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 16384
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 65536
 
 struct UniformAudioBufferDescriptor {
     float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
@@ -30,6 +30,17 @@ struct PushConstantAudioBufferDescriptor {
 
 struct PushConstants {
     PushConstantAudioBufferDescriptor buffer;
+};
+
+struct PlaybackBuffer {
+    uint32_t sampleCount;
+    float* samples;
+
+    uint32_t start;
+    uint32_t end;
+
+    uint32_t playedUntil;
+    uint64_t totalSamplesPlayed;
 };
 
 /* adapted from old test code from krisvers/vkom */
@@ -185,28 +196,101 @@ int main(int argc, char** argv) {
     vkom::IUniformBuffer* cpuUniformBufferUBO = cpuUniformBuffer->queryInterface<vkom::IUniformBuffer>();
     assert(cpuUniformBufferUBO != nullptr);
 
-    klatr::audio::IInstance* instance = klatr::audio::createInstance(klatr::audio::InstanceBackendFlags::Any);
-    assert(instance != nullptr);
+    PlaybackBuffer playbackBuffer = {};
+    playbackBuffer.sampleCount = 16384;
+    playbackBuffer.samples = new float[playbackBuffer.sampleCount];
+    playbackBuffer.start = 0;
+    playbackBuffer.end = 0;
+    playbackBuffer.playedUntil = 0;
 
-    klatr::audio::IOutputAdapter* outputAdapter = instance->defaultAdapter<klatr::audio::IOutputAdapter>(klatr::audio::DeviceFlowFlags::Output);
-    assert(outputAdapter != nullptr);
+    ma_log maContextLogger = {};
+    maContextLogger.callbacks[0].onLog = [](void* user, ma_uint32 level, const char* message) {
+        std::printf("[miniaudio(%u)]: %s", level, message);
+    };
 
-    klatr::audio::AdapterInfo outputAdapterInfo = {};
-    outputAdapter->getInfo(&outputAdapterInfo);
+    maContextLogger.callbackCount = 1;
 
-    uint32_t outputDeviceChannelCount = std::bitset<32>(static_cast<std::underlying_type_t<klatr::audio::DeviceChannelFlags>>(outputAdapterInfo.channels)).count();
+    ma_context_config maContextConfig = {};
+    maContextConfig.pLog = &maContextLogger;
+    maContextConfig.threadPriority = ma_thread_priority_default;
 
-    klatr::audio::DeviceInfo outputDeviceInfo = {};
-    outputDeviceInfo.format = klatr::audio::FormatFlags::Float32;
-    outputDeviceInfo.flow = klatr::audio::DeviceFlowFlags::Output;
-    outputDeviceInfo.sampleRate = outputAdapterInfo.highestTypicalSampleRate;
-    outputDeviceInfo.sampleCount = outputAdapterInfo.highestTypicalSampleRate / 10 * outputDeviceChannelCount;
+    ma_context maContext = {};
+    assert(ma_context_init(nullptr, 0, &maContextConfig, &maContext) == MA_SUCCESS);
 
-    klatr::audio::IOutputDevice* outputDevice = outputAdapter->createDevice(&outputDeviceInfo)->queryInterface<klatr::audio::IOutputDevice>();
-    assert(outputDevice != nullptr);
-    assert(outputDevice->start(klatr::audio::DeviceFlowFlags::Output));
+    ma_device_config maPlaybackDeviceConfig = {};
+    maPlaybackDeviceConfig.deviceType = ma_device_type_playback;
+    maPlaybackDeviceConfig.sampleRate = 48000;
+    maPlaybackDeviceConfig.dataCallback = [](ma_device* device, void* output, void const* input, ma_uint32 frameCount) {
+        assert(device->playback.format == ma_format_f32);
+
+        PlaybackBuffer* playbackBuffer = reinterpret_cast<PlaybackBuffer*>(device->pUserData);
+        if (playbackBuffer == nullptr) {
+            return;
+        }
+
+        uint32_t playbackStart = playbackBuffer->start;
+        uint32_t playbackEnd = playbackBuffer->end;
+        uint32_t playbackSampleCount = playbackBuffer->sampleCount;
+
+        uint32_t requestedFrameCount = frameCount;
+        uint32_t availableSampleCounts[2] = {};
+        if (playbackEnd < playbackStart) {
+            availableSampleCounts[0] = playbackSampleCount - playbackStart;
+            availableSampleCounts[1] = playbackEnd;
+        } else {
+            availableSampleCounts[0] = playbackEnd - playbackStart;
+            availableSampleCounts[1] = 0;
+        }
+
+        uint32_t channels = device->playback.channels;
+        uint32_t availableFrameCounts[2] = {};
+        availableFrameCounts[0] = availableSampleCounts[0] / channels;
+        availableFrameCounts[1] = availableSampleCounts[1] / channels;
+
+        uint32_t totalAvailableFrameCount = availableFrameCounts[0] + availableFrameCounts[1];
+        uint32_t totalCopiableFrameCount = std::min(totalAvailableFrameCount, requestedFrameCount);
+
+        uint32_t copiableFrameCounts[2] = {};
+        copiableFrameCounts[0] = std::min(availableFrameCounts[0], totalCopiableFrameCount);
+        if (totalCopiableFrameCount > availableFrameCounts[0]) {
+            copiableFrameCounts[1] = (totalCopiableFrameCount - availableFrameCounts[0]);
+        }
+
+        if (copiableFrameCounts[0] == 0) {
+            return;
+        }
+
+        float* playbackBufferStarts[2] = {};
+        playbackBufferStarts[0] = &playbackBuffer->samples[playbackStart];
+
+        float* outputStarts[2] = {};
+        outputStarts[0] = reinterpret_cast<float*>(output);
+        if (copiableFrameCounts[1] != 0) {
+            playbackBufferStarts[1] = &playbackBuffer->samples[copiableFrameCounts[0] * channels];
+            outputStarts[1] = &reinterpret_cast<float*>(output)[copiableFrameCounts[0] * channels];
+        }
+
+        std::memcpy(outputStarts[0], playbackBufferStarts[0], copiableFrameCounts[0] * channels * sizeof(float));
+        playbackBuffer->playedUntil = playbackStart + copiableFrameCounts[0] * channels;
+
+        if (copiableFrameCounts[1] != 0) {
+            std::memcpy(outputStarts[1], playbackBufferStarts[1], copiableFrameCounts[1] * channels * sizeof(float));
+            playbackBuffer->playedUntil = copiableFrameCounts[1] * channels;
+        }
+
+        playbackBuffer->totalSamplesPlayed += totalCopiableFrameCount * channels;
+    };
+
+    maPlaybackDeviceConfig.pUserData = &playbackBuffer;
+    maPlaybackDeviceConfig.playback.format = ma_format_f32;
+    maPlaybackDeviceConfig.playback.channels = 2;
+
+    ma_device maPlaybackDevice = {};
+    assert(ma_device_init(&maContext, &maPlaybackDeviceConfig, &maPlaybackDevice) == MA_SUCCESS);
+    assert(ma_device_start(&maPlaybackDevice) == MA_SUCCESS);
 
     uint64_t globalID = 0;
+    uint32_t previousPlayedUntil = 0;
 
     bool running = true;
     while (running) {
@@ -259,12 +343,12 @@ int main(int argc, char** argv) {
 
         Uniforms uniforms = {};
         uniforms.globalID = globalID;
-        uniforms.sampleRate = outputDeviceInfo.sampleRate;
+        uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
         uniforms.buffer.bounds[0] = -1.0f;
         uniforms.buffer.bounds[1] = 1.0f;
         uniforms.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
 
-        std::printf("%u\n", globalID);
+        //std::printf("%u\n", globalID);
 
         void* mappedUniformBuffer = cpuUniformBuffer->map();
         std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
@@ -292,32 +376,48 @@ int main(int argc, char** argv) {
         assert(batchFinishedFence->wait() == vkom::Result::Success);
         assert(batchFinishedFence->reset() == vkom::Result::Success);
 
+        std::printf("%u %u %u %llu\n", playbackBuffer.start, playbackBuffer.end, playbackBuffer.playedUntil, playbackBuffer.totalSamplesPlayed);
+
+        uint32_t newStart = playbackBuffer.end % playbackBuffer.sampleCount;
+        uint32_t producedSampleCount = cpuEndpointBufferInfo.size / sizeof(float);
+        uint32_t availableSampleCounts[2] = {};
+        availableSampleCounts[0] = playbackBuffer.sampleCount - newStart;
+        availableSampleCounts[1] = newStart;
+
+        uint32_t totalCopiableSampleCount = std::min(producedSampleCount, playbackBuffer.sampleCount);
+
+        uint32_t copiableSampleCounts[2] = {};
+        copiableSampleCounts[0] = std::min(producedSampleCount, availableSampleCounts[0]);
+        if (totalCopiableSampleCount > availableSampleCounts[0]) {
+            copiableSampleCounts[1] = totalCopiableSampleCount - availableSampleCounts[0];
+        }
+
+        uint32_t newEnd = playbackBuffer.end;
+        float* cpuEndpointMapped = reinterpret_cast<float*>(cpuEndpointBuffer->map());
+        if (copiableSampleCounts[0] != 0) {
+            assert(newStart + copiableSampleCounts[0] <= playbackBuffer.sampleCount);
+            assert(copiableSampleCounts[0] <= cpuEndpointBufferInfo.size / sizeof(float));
+
+            std::memcpy(&playbackBuffer.samples[newStart], cpuEndpointMapped, copiableSampleCounts[0] * sizeof(float));
+            newEnd = newStart + copiableSampleCounts[0];
+        }
+
+        if (copiableSampleCounts[1] != 0) {
+            assert(copiableSampleCounts[1] < playbackBuffer.sampleCount);
+            assert(copiableSampleCounts[0] + copiableSampleCounts[1] <= cpuEndpointBufferInfo.size / sizeof(float));
+
+            std::memcpy(&playbackBuffer.samples[0], &cpuEndpointMapped[copiableSampleCounts[0]], copiableSampleCounts[1] * sizeof(float));
+            newEnd = copiableSampleCounts[1];
+        }
+
+        playbackBuffer.start = newStart;
+        playbackBuffer.end = newEnd;
+        cpuEndpointBuffer->unmap();
+
+        globalID += totalCopiableSampleCount / maPlaybackDevice.playback.channels;
+
         batch->discard();
         encoder->release();
-
-        /* NOTE: mixing frame counts and sample counts (modules work with individual channels as their own buffers currently) */
-        klatr::audio::IOutputBuffer* outputBuffer = outputDevice->acquireOutputBuffer(outputDeviceInfo.sampleCount / outputDeviceChannelCount);
-        if (outputBuffer != nullptr) {
-            uint32_t outputPadding = outputDevice->currentPadding();
-            uint32_t endpointAvailableFrames = INTERNAL_AUDIO_BUFFER_FRAME_COUNT / outputDeviceChannelCount;
-            uint32_t outputAvailableFrames = outputBuffer->frameCount() - outputPadding;
-            uint32_t frames = std::min(endpointAvailableFrames, outputAvailableFrames);
-            uint64_t bytes = frames * sizeof(float) * outputDeviceChannelCount;
-
-            if (frames != 0) {
-                float* mappedEndpointBuffer = reinterpret_cast<float*>(cpuEndpointBuffer->map());
-                std::printf("%f %f %f %f\n", mappedEndpointBuffer[0], mappedEndpointBuffer[1], mappedEndpointBuffer[2], mappedEndpointBuffer[3]);
-
-                float* mappedOutputBuffer = reinterpret_cast<float*>(outputBuffer->map());
-                std::memcpy(&mappedOutputBuffer[outputPadding * outputDeviceChannelCount], mappedEndpointBuffer, bytes);
-                cpuEndpointBuffer->unmap();
-            }
-
-            globalID += frames;
-            outputBuffer->produce(frames);
-            outputBuffer->unmap();
-            outputBuffer->release();
-        }
     }
 
     SDL_DestroyWindow(mainWindow);
