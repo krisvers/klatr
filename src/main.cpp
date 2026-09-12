@@ -1,6 +1,5 @@
 #include <klatr/gpu/context.hpp>
 
-#define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
 #include <SDL3/SDL.h>
@@ -8,6 +7,8 @@
 #include <bitset>
 #include <fstream>
 #include <cassert>
+#include <chrono>
+#include <filesystem>
 
 #define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 441 * 100
 #define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 441000
@@ -73,6 +74,58 @@ std::vector<uint32_t> loadFile(const char* path) {
 
     in.close();
     return code;
+}
+
+struct ModuleInfo {
+    std::filesystem::file_time_type lastModified;
+    std::vector<uint32_t> spirv;
+    vkom::IShaderModule* shader;
+};
+
+vkom::IShaderModule* loadModule(ModuleInfo& info, vkom::IDevice* device, const char* path, std::filesystem::file_time_type previousLastModified = std::filesystem::file_time_type::min()) {
+    info = {};
+
+    if (!std::filesystem::exists(path)) {
+        return nullptr;
+    }
+
+    info.lastModified = std::filesystem::last_write_time(path);
+    if (info.lastModified <= previousLastModified) {
+        return nullptr;
+    }
+
+    info.spirv = loadFile(path);
+    if (info.spirv.empty()) {
+        return nullptr;
+    }
+
+    vkom::ShaderModuleInfo moduleShaderInfo = {};
+    moduleShaderInfo.length = info.spirv.size();
+    moduleShaderInfo.spirv = &info.spirv[0];
+
+    if (device->createShaderModule(&moduleShaderInfo, &info.shader) != vkom::Result::Success) {
+        return nullptr;
+    }
+
+    return info.shader;
+}
+
+vkom::IComputePipeline* loadModuleAndPipeline(ModuleInfo& moduleInfo, vkom::IDevice* device, vkom::IPipelineLayout* layout, const char* path, std::filesystem::file_time_type previousLastModified = std::filesystem::file_time_type::min()) {
+    if (loadModule(moduleInfo, device, path, previousLastModified) == nullptr) {
+        return nullptr;
+    }
+
+    vkom::ComputePipelineInfo modulePipelineInfo = {};
+    modulePipelineInfo.shaderInfo.shader = moduleInfo.shader;
+    modulePipelineInfo.shaderInfo.stage = vkom::ShaderStageFlags::Compute;
+    modulePipelineInfo.shaderInfo.entry = "module";
+
+    vkom::IComputePipeline* modulePipeline;
+    if (device->createComputePipeline(&modulePipelineInfo, nullptr, layout, &modulePipeline) != vkom::Result::Success) {
+        return nullptr;
+    }
+
+    return modulePipeline;
 }
 
 int main(int argc, char** argv) {
@@ -143,23 +196,9 @@ int main(int argc, char** argv) {
     vkom::IPipelineLayout* modulePipelineLayout;
     assert(gpuContext.device->createPipelineLayout(&modulePipelineLayoutInfo, &modulePipelineLayout) == vkom::Result::Success);
 
-    std::vector<uint32_t> moduleShaderSPIRV = loadFile("module.hlsl.spv");
-    assert(!moduleShaderSPIRV.empty());
-
-    vkom::ShaderModuleInfo moduleShaderInfo = {};
-    moduleShaderInfo.length = moduleShaderSPIRV.size();
-    moduleShaderInfo.spirv = &moduleShaderSPIRV[0];
-
-    vkom::IShaderModule* moduleShader;
-    assert(gpuContext.device->createShaderModule(&moduleShaderInfo, &moduleShader) == vkom::Result::Success);
-
-    vkom::ComputePipelineInfo modulePipelineInfo = {};
-    modulePipelineInfo.shaderInfo.shader = moduleShader;
-    modulePipelineInfo.shaderInfo.stage = vkom::ShaderStageFlags::Compute;
-    modulePipelineInfo.shaderInfo.entry = "module";
-
-    vkom::IComputePipeline* modulePipeline;
-    assert(gpuContext.device->createComputePipeline(&modulePipelineInfo, nullptr, modulePipelineLayout, &modulePipeline) == vkom::Result::Success);
+    ModuleInfo defaultModule = {};
+    vkom::IComputePipeline* defaultModulePipeline = loadModuleAndPipeline(defaultModule, gpuContext.device, modulePipelineLayout, "module.hlsl.spv");
+    assert(defaultModulePipeline != nullptr);
 
     vkom::IFence* batchFinishedFence;
     assert(gpuContext.device->acquireFence(false, &batchFinishedFence) == vkom::Result::Success);
@@ -314,6 +353,17 @@ int main(int argc, char** argv) {
                 case SDL_EVENT_QUIT:
                     running = false;
                     break;
+                case SDL_EVENT_KEY_DOWN:
+                    if (event.key.key == SDLK_S) {
+                        ma_encoder_config maEncoderConfig = ma_encoder_config_init(ma_encoding_format_wav, maPlaybackDeviceConfig.playback.format, maPlaybackDeviceConfig.playback.channels, maPlaybackDeviceConfig.sampleRate);
+
+                        ma_encoder maEncoder = {};
+                        assert(ma_encoder_init_file("out.wav", &maEncoderConfig, &maEncoder) == MA_SUCCESS);
+
+                        assert(ma_encoder_write_pcm_frames(&maEncoder, playbackBuffer.samples, playbackBuffer.sampleCount / maPlaybackDeviceConfig.playback.channels, nullptr) == MA_SUCCESS);
+                        ma_encoder_uninit(&maEncoder);
+                    }
+                    break;
                 default:
                     break;
             }
@@ -353,7 +403,7 @@ int main(int argc, char** argv) {
             vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
             assert(cp != nullptr);
 
-            cp->bindPipeline(modulePipeline);
+            cp->bindPipeline(defaultModulePipeline);
             cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
 
             Uniforms uniforms = {};
@@ -441,6 +491,17 @@ int main(int argc, char** argv) {
         }
 
         globalID = playbackBuffer.totalSamplesProduced;//totalCopiableSampleCount / maPlaybackDevice.playback.channels;
+
+        ModuleInfo newDefaultModule = {};
+        vkom::IComputePipeline* newDefaultModulePipeline = loadModuleAndPipeline(newDefaultModule, gpuContext.device, modulePipelineLayout, "module.hlsl.spv", defaultModule.lastModified);
+        if (newDefaultModulePipeline != nullptr) {
+            gpuContext.device->waitIdle();
+            defaultModulePipeline->release();
+            defaultModule.shader->release();
+
+            defaultModulePipeline = newDefaultModulePipeline;
+            defaultModule = newDefaultModule;
+        }
     }
 
     SDL_DestroyWindow(mainWindow);

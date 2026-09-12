@@ -16,8 +16,9 @@ sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
 miniaudio = dependency('miniaudio', version: '>=0.11.0', required: true)
 
 klatr_sources = [
-    # bootstrap
+    # bootstrap and temp impl
     'src/main.cpp',
+    'src/miniaudio.cpp',
 
     # klatr headers
     'src/klatr/enums.hpp',
