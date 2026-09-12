@@ -9,7 +9,8 @@
 #include <fstream>
 #include <cassert>
 
-#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 65536
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 441 * 100
+#define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 441000
 
 struct UniformAudioBufferDescriptor {
     float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
@@ -18,7 +19,10 @@ struct UniformAudioBufferDescriptor {
 
 struct Uniforms {
     uint64_t globalID;
+    float globalTime;
+    uint32_t dispatchWidth;
     uint32_t sampleRate;
+    float inverseSampleRate;
     UniformAudioBufferDescriptor buffer;
 };
 
@@ -39,8 +43,11 @@ struct PlaybackBuffer {
     uint32_t start;
     uint32_t end;
 
+    uint32_t nextPredictedPlay;
     uint32_t playedUntil;
+    uint64_t samplesPlayedSinceLastProduction;
     uint64_t totalSamplesPlayed;
+    uint64_t totalSamplesProduced;
 };
 
 /* adapted from old test code from krisvers/vkom */
@@ -158,7 +165,7 @@ int main(int argc, char** argv) {
     assert(gpuContext.device->acquireFence(false, &batchFinishedFence) == vkom::Result::Success);
 
     vkom::BufferInfo cpuEndpointBufferInfo = {};
-    cpuEndpointBufferInfo.size = sizeof(float) * INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+    cpuEndpointBufferInfo.size = sizeof(float) * ((INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 512) / 1024) * 1024;
     cpuEndpointBufferInfo.usage = vkom::BufferUsageFlags::TransferDestination | vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress;
     cpuEndpointBufferInfo.location = vkom::MemoryLocationFlags::CPU;
 
@@ -197,11 +204,8 @@ int main(int argc, char** argv) {
     assert(cpuUniformBufferUBO != nullptr);
 
     PlaybackBuffer playbackBuffer = {};
-    playbackBuffer.sampleCount = 16384;
+    playbackBuffer.sampleCount = INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT;
     playbackBuffer.samples = new float[playbackBuffer.sampleCount];
-    playbackBuffer.start = 0;
-    playbackBuffer.end = 0;
-    playbackBuffer.playedUntil = 0;
 
     ma_log maContextLogger = {};
     maContextLogger.callbacks[0].onLog = [](void* user, ma_uint32 level, const char* message) {
@@ -219,22 +223,24 @@ int main(int argc, char** argv) {
 
     ma_device_config maPlaybackDeviceConfig = {};
     maPlaybackDeviceConfig.deviceType = ma_device_type_playback;
-    maPlaybackDeviceConfig.sampleRate = 48000;
+    maPlaybackDeviceConfig.sampleRate = 44100;
     maPlaybackDeviceConfig.dataCallback = [](ma_device* device, void* output, void const* input, ma_uint32 frameCount) {
         assert(device->playback.format == ma_format_f32);
+
+        ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(-2) %u/%u/0x%lx requested (frames/samples/bytes)\n", frameCount, frameCount * device->playback.channels, frameCount * device->playback.channels * sizeof(float));
 
         PlaybackBuffer* playbackBuffer = reinterpret_cast<PlaybackBuffer*>(device->pUserData);
         if (playbackBuffer == nullptr) {
             return;
         }
 
-        uint32_t playbackStart = playbackBuffer->start;
+        uint32_t playbackStart = playbackBuffer->nextPredictedPlay;
         uint32_t playbackEnd = playbackBuffer->end;
         uint32_t playbackSampleCount = playbackBuffer->sampleCount;
 
         uint32_t requestedFrameCount = frameCount;
         uint32_t availableSampleCounts[2] = {};
-        if (playbackEnd < playbackStart) {
+        if (playbackEnd <= playbackStart) {
             availableSampleCounts[0] = playbackSampleCount - playbackStart;
             availableSampleCounts[1] = playbackEnd;
         } else {
@@ -257,6 +263,7 @@ int main(int argc, char** argv) {
         }
 
         if (copiableFrameCounts[0] == 0) {
+            ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(-1) no samples available; played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
             return;
         }
 
@@ -270,20 +277,27 @@ int main(int argc, char** argv) {
             outputStarts[1] = &reinterpret_cast<float*>(output)[copiableFrameCounts[0] * channels];
         }
 
+        ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(0) %u/%u/0x%lx (frames/samples/bytes), from playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableFrameCounts[0], copiableFrameCounts[0] * channels, copiableFrameCounts[0] * channels * sizeof(float), playbackStart / channels, playbackStart, playbackStart * sizeof(float), playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
+
         std::memcpy(outputStarts[0], playbackBufferStarts[0], copiableFrameCounts[0] * channels * sizeof(float));
         playbackBuffer->playedUntil = playbackStart + copiableFrameCounts[0] * channels;
 
         if (copiableFrameCounts[1] != 0) {
+            ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(1) %u/%u/0x%lx (frames/samples/bytes), from playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableFrameCounts[1], copiableFrameCounts[1] * channels, copiableFrameCounts[1] * channels * sizeof(float), copiableFrameCounts[0], copiableFrameCounts[0] * channels, copiableFrameCounts[0] * channels * sizeof(float), playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
+
             std::memcpy(outputStarts[1], playbackBufferStarts[1], copiableFrameCounts[1] * channels * sizeof(float));
             playbackBuffer->playedUntil = copiableFrameCounts[1] * channels;
         }
 
+        playbackBuffer->playedUntil %= playbackSampleCount;
+        playbackBuffer->nextPredictedPlay = playbackBuffer->playedUntil;
+        playbackBuffer->samplesPlayedSinceLastProduction += totalCopiableFrameCount * channels;
         playbackBuffer->totalSamplesPlayed += totalCopiableFrameCount * channels;
     };
 
     maPlaybackDeviceConfig.pUserData = &playbackBuffer;
     maPlaybackDeviceConfig.playback.format = ma_format_f32;
-    maPlaybackDeviceConfig.playback.channels = 2;
+    maPlaybackDeviceConfig.playback.channels = 1;
 
     ma_device maPlaybackDevice = {};
     assert(ma_device_init(&maContext, &maPlaybackDeviceConfig, &maPlaybackDevice) == MA_SUCCESS);
@@ -305,119 +319,128 @@ int main(int argc, char** argv) {
             }
         }
 
-        vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
-        vkom::IResourceView* cpuEndpointBufferResourceView = cpuEndpointBufferView->queryInterface<vkom::IResourceView>();
+        if (playbackBuffer.samplesPlayedSinceLastProduction >= playbackBuffer.sampleCount / 2 || playbackBuffer.totalSamplesPlayed >= playbackBuffer.totalSamplesProduced) {
+            vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
+            vkom::IResourceView* cpuEndpointBufferResourceView = cpuEndpointBufferView->queryInterface<vkom::IResourceView>();
 
-        vkom::DescriptorWrite moduleDescriptorSetWrites[2] = {};
-        moduleDescriptorSetWrites[0].binding = 0;
-        moduleDescriptorSetWrites[0].element = 0;
-        moduleDescriptorSetWrites[0].count = 1;
-        moduleDescriptorSetWrites[0].views = &cpuUniformBufferResourceView;
-        moduleDescriptorSetWrites[1].binding = 1;
-        moduleDescriptorSetWrites[1].element = 0;
-        moduleDescriptorSetWrites[1].count = 1;
-        moduleDescriptorSetWrites[1].views = &cpuEndpointBufferResourceView;
+            vkom::DescriptorWrite moduleDescriptorSetWrites[2] = {};
+            moduleDescriptorSetWrites[0].binding = 0;
+            moduleDescriptorSetWrites[0].element = 0;
+            moduleDescriptorSetWrites[0].count = 1;
+            moduleDescriptorSetWrites[0].views = &cpuUniformBufferResourceView;
+            moduleDescriptorSetWrites[1].binding = 1;
+            moduleDescriptorSetWrites[1].element = 0;
+            moduleDescriptorSetWrites[1].count = 1;
+            moduleDescriptorSetWrites[1].views = &cpuEndpointBufferResourceView;
 
-        moduleDescriptorSet->write(2, &moduleDescriptorSetWrites[0]);
+            moduleDescriptorSet->write(2, &moduleDescriptorSetWrites[0]);
 
-        vkom::ICommandEncoder* encoder;
-        assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
+            vkom::ICommandEncoder* encoder;
+            assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
 
-        vkom::ITransferDestinationBuffer* cpuEndpointBufferTD = cpuEndpointBuffer->queryInterface<vkom::ITransferDestinationBuffer>();
-        assert(cpuEndpointBufferTD != nullptr);
+            vkom::ITransferDestinationBuffer* cpuEndpointBufferTD = cpuEndpointBuffer->queryInterface<vkom::ITransferDestinationBuffer>();
+            assert(cpuEndpointBufferTD != nullptr);
 
-        vkom::BufferFill cpuEndpointBufferFill = {};
-        cpuEndpointBufferFill.dstOffset = 0;
-        cpuEndpointBufferFill.size = cpuEndpointBufferInfo.size;
-        cpuEndpointBufferFill.word = 0;
+            vkom::BufferFill cpuEndpointBufferFill = {};
+            cpuEndpointBufferFill.dstOffset = 0;
+            cpuEndpointBufferFill.size = cpuEndpointBufferInfo.size;
+            cpuEndpointBufferFill.word = 0;
 
-        encoder->fillBuffer(cpuEndpointBufferTD, &cpuEndpointBufferFill);
+            encoder->fillBuffer(cpuEndpointBufferTD, &cpuEndpointBufferFill);
 
-        vkom::ComputePassDescriptor cpDescriptor = {};
+            vkom::ComputePassDescriptor cpDescriptor = {};
 
-        vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
-        assert(cp != nullptr);
+            vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
+            assert(cp != nullptr);
 
-        cp->bindPipeline(modulePipeline);
-        cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
+            cp->bindPipeline(modulePipeline);
+            cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
 
-        Uniforms uniforms = {};
-        uniforms.globalID = globalID;
-        uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
-        uniforms.buffer.bounds[0] = -1.0f;
-        uniforms.buffer.bounds[1] = 1.0f;
-        uniforms.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+            Uniforms uniforms = {};
+            uniforms.globalID = globalID;
+            uniforms.globalTime = static_cast<float>(globalID) / static_cast<float>(maPlaybackDeviceConfig.sampleRate);
+            uniforms.dispatchWidth = (INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 1023) / 1024;
+            uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
+            uniforms.inverseSampleRate = 1.0f / static_cast<float>(uniforms.sampleRate);
+            uniforms.buffer.bounds[0] = -1.0f;
+            uniforms.buffer.bounds[1] = 1.0f;
+            uniforms.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
 
-        //std::printf("%u\n", globalID);
+            //std::printf("%u\n", globalID);
 
-        void* mappedUniformBuffer = cpuUniformBuffer->map();
-        std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
-        cpuUniformBuffer->unmap();
+            void* mappedUniformBuffer = cpuUniformBuffer->map();
+            std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
+            cpuUniformBuffer->unmap();
 
-        PushConstants pushConstants = {};
-        pushConstants.buffer.address = cpuEndpointBufferDA->deviceAddress();
-        pushConstants.buffer.bounds[0] = uniforms.buffer.bounds[0];
-        pushConstants.buffer.bounds[1] = uniforms.buffer.bounds[1];
-        pushConstants.buffer.count = uniforms.buffer.count;
+            PushConstants pushConstants = {};
+            pushConstants.buffer.address = cpuEndpointBufferDA->deviceAddress();
+            pushConstants.buffer.bounds[0] = uniforms.buffer.bounds[0];
+            pushConstants.buffer.bounds[1] = uniforms.buffer.bounds[1];
+            pushConstants.buffer.count = uniforms.buffer.count;
 
-        cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants);
-        cp->dispatch(INTERNAL_AUDIO_BUFFER_FRAME_COUNT, 1, 1);
+            cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants);
+            cp->dispatch(uniforms.dispatchWidth, 1, 1);
 
-        cp->end();
-        cp = nullptr;
+            cp->end();
+            cp = nullptr;
 
-        vkom::ICommandBatch* batch;
-        assert(encoder->batch(&batch) == vkom::Result::Success);
+            vkom::ICommandBatch* batch;
+            assert(encoder->batch(&batch) == vkom::Result::Success);
 
-        vkom::CommandBatchSubmitInfo submitInfo = {};
-        submitInfo.signalFence = batchFinishedFence;
+            vkom::CommandBatchSubmitInfo submitInfo = {};
+            submitInfo.signalFence = batchFinishedFence;
 
-        assert(batch->submit(&submitInfo) == vkom::Result::Success);
-        assert(batchFinishedFence->wait() == vkom::Result::Success);
-        assert(batchFinishedFence->reset() == vkom::Result::Success);
+            assert(batch->submit(&submitInfo) == vkom::Result::Success);
+            assert(batchFinishedFence->wait() == vkom::Result::Success);
+            assert(batchFinishedFence->reset() == vkom::Result::Success);
 
-        std::printf("%u %u %u %llu\n", playbackBuffer.start, playbackBuffer.end, playbackBuffer.playedUntil, playbackBuffer.totalSamplesPlayed);
+            batch->discard();
+            encoder->release();
 
-        uint32_t newStart = playbackBuffer.end % playbackBuffer.sampleCount;
-        uint32_t producedSampleCount = cpuEndpointBufferInfo.size / sizeof(float);
-        uint32_t availableSampleCounts[2] = {};
-        availableSampleCounts[0] = playbackBuffer.sampleCount - newStart;
-        availableSampleCounts[1] = newStart;
+            uint32_t newStart = playbackBuffer.end % playbackBuffer.sampleCount;
+            uint32_t producedSampleCount = cpuEndpointBufferInfo.size / sizeof(float);
+            uint32_t availableSampleCounts[2] = {};
+            availableSampleCounts[0] = playbackBuffer.sampleCount - newStart;
+            availableSampleCounts[1] = newStart;
 
-        uint32_t totalCopiableSampleCount = std::min(producedSampleCount, playbackBuffer.sampleCount);
+            uint32_t totalCopiableSampleCount = std::min(producedSampleCount, playbackBuffer.sampleCount);
 
-        uint32_t copiableSampleCounts[2] = {};
-        copiableSampleCounts[0] = std::min(producedSampleCount, availableSampleCounts[0]);
-        if (totalCopiableSampleCount > availableSampleCounts[0]) {
-            copiableSampleCounts[1] = totalCopiableSampleCount - availableSampleCounts[0];
+            uint32_t copiableSampleCounts[2] = {};
+            copiableSampleCounts[0] = std::min(producedSampleCount, availableSampleCounts[0]);
+            if (totalCopiableSampleCount > availableSampleCounts[0]) {
+                copiableSampleCounts[1] = totalCopiableSampleCount - availableSampleCounts[0];
+            }
+
+            uint32_t newEnd = playbackBuffer.end;
+            float* cpuEndpointMapped = reinterpret_cast<float*>(cpuEndpointBuffer->map());
+            if (copiableSampleCounts[0] != 0) {
+                assert(newStart + copiableSampleCounts[0] <= playbackBuffer.sampleCount);
+                assert(copiableSampleCounts[0] <= cpuEndpointBufferInfo.size / sizeof(float));
+
+                ma_log_postf(maContext.pLog, MA_LOG_LEVEL_INFO, "+producing(0) %u/%u/0x%lx (frames/samples/bytes), to playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableSampleCounts[0] / maPlaybackDevice.playback.channels, copiableSampleCounts[0], copiableSampleCounts[0] * sizeof(float), newStart / maPlaybackDevice.playback.channels, newStart, newStart * sizeof(float), playbackBuffer.samplesPlayedSinceLastProduction / maPlaybackDevice.playback.channels, playbackBuffer.samplesPlayedSinceLastProduction, playbackBuffer.samplesPlayedSinceLastProduction * sizeof(float));
+
+                std::memcpy(&playbackBuffer.samples[newStart], cpuEndpointMapped, copiableSampleCounts[0] * sizeof(float));
+                newEnd = newStart + copiableSampleCounts[0];
+            }
+
+            if (copiableSampleCounts[1] != 0) {
+                assert(copiableSampleCounts[1] < playbackBuffer.sampleCount);
+                assert(copiableSampleCounts[0] + copiableSampleCounts[1] <= cpuEndpointBufferInfo.size / sizeof(float));
+
+                ma_log_postf(maContext.pLog, MA_LOG_LEVEL_INFO, "+producing(1) %u/%u/0x%lx (frames/samples/bytes), to playback buffer offset 0/0/0x0 (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableSampleCounts[1] / maPlaybackDevice.playback.channels, copiableSampleCounts[1], copiableSampleCounts[1] * sizeof(float), playbackBuffer.samplesPlayedSinceLastProduction / maPlaybackDevice.playback.channels, playbackBuffer.samplesPlayedSinceLastProduction, playbackBuffer.samplesPlayedSinceLastProduction * sizeof(float));
+
+                std::memcpy(&playbackBuffer.samples[0], &cpuEndpointMapped[copiableSampleCounts[0]], copiableSampleCounts[1] * sizeof(float));
+                newEnd = copiableSampleCounts[1];
+            }
+
+            playbackBuffer.start = newStart;
+            playbackBuffer.end = newEnd;
+            playbackBuffer.samplesPlayedSinceLastProduction = 0;
+            playbackBuffer.totalSamplesProduced += producedSampleCount;
+            cpuEndpointBuffer->unmap();
         }
 
-        uint32_t newEnd = playbackBuffer.end;
-        float* cpuEndpointMapped = reinterpret_cast<float*>(cpuEndpointBuffer->map());
-        if (copiableSampleCounts[0] != 0) {
-            assert(newStart + copiableSampleCounts[0] <= playbackBuffer.sampleCount);
-            assert(copiableSampleCounts[0] <= cpuEndpointBufferInfo.size / sizeof(float));
-
-            std::memcpy(&playbackBuffer.samples[newStart], cpuEndpointMapped, copiableSampleCounts[0] * sizeof(float));
-            newEnd = newStart + copiableSampleCounts[0];
-        }
-
-        if (copiableSampleCounts[1] != 0) {
-            assert(copiableSampleCounts[1] < playbackBuffer.sampleCount);
-            assert(copiableSampleCounts[0] + copiableSampleCounts[1] <= cpuEndpointBufferInfo.size / sizeof(float));
-
-            std::memcpy(&playbackBuffer.samples[0], &cpuEndpointMapped[copiableSampleCounts[0]], copiableSampleCounts[1] * sizeof(float));
-            newEnd = copiableSampleCounts[1];
-        }
-
-        playbackBuffer.start = newStart;
-        playbackBuffer.end = newEnd;
-        cpuEndpointBuffer->unmap();
-
-        globalID += totalCopiableSampleCount / maPlaybackDevice.playback.channels;
-
-        batch->discard();
-        encoder->release();
+        globalID = playbackBuffer.totalSamplesProduced;//totalCopiableSampleCount / maPlaybackDevice.playback.channels;
     }
 
     SDL_DestroyWindow(mainWindow);
