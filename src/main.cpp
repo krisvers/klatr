@@ -10,13 +10,14 @@
 #include <chrono>
 #include <filesystem>
 
-#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 441 * 100
-#define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 441000
+#define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 44100 * 100
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 4410 * 800
 
-struct UniformAudioBufferDescriptor {
-    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
-    uint32_t count;
-};
+//struct UniformAudioBufferDescriptor {
+//    uint32_t count;
+//    uint32_t padding0;
+//    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
+//};
 
 struct Uniforms {
     uint64_t globalID;
@@ -24,13 +25,13 @@ struct Uniforms {
     uint32_t dispatchWidth;
     uint32_t sampleRate;
     float inverseSampleRate;
-    UniformAudioBufferDescriptor buffer;
 };
 
 struct PushConstantAudioBufferDescriptor {
     uint64_t address;
-    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
     uint32_t count;
+    uint32_t padding0;
+    float bounds[2]; /* note: if bounds[0] == bounds[1] this is treated as a constant */
 };
 
 struct PushConstants {
@@ -139,6 +140,40 @@ int main(int argc, char** argv) {
     SDL_Window* mainWindow = SDL_CreateWindow("klatr | main", 1200, 800, 0);
     assert(mainWindow != nullptr);
 
+    vkom::IWSIInstance* wsiInstance = gpuContext.instance->queryInterface<vkom::IWSIInstance>();
+    assert(wsiInstance != nullptr);
+
+    vkom::IWSIDevice* wsiDevice = gpuContext.device->queryInterface<vkom::IWSIDevice>();
+    assert(wsiDevice != nullptr);
+
+    /* TODO: other platforms */
+    vkom::SurfaceWSIInfo mainSurfaceInfo = {};
+    mainSurfaceInfo.type = vkom::SurfaceWSIType::Win32;
+    mainSurfaceInfo.windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(mainWindow), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    mainSurfaceInfo.displayHandle= reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(mainWindow), SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr));
+
+    vkom::ISurface* mainSurface;
+    assert(wsiInstance->createSurface(&mainSurfaceInfo, &mainSurface) == vkom::Result::Success);
+
+    vkom::SurfaceCapabilities mainSurfaceCapabilities = {};
+    gpuContext.adapter->querySurfaceCapabilities(mainSurface, &mainSurfaceCapabilities);
+
+    vkom::SwapchainInfo mainSwapchainInfo = {};
+    mainSwapchainInfo.backbufferCount = std::min(std::max(3u, mainSurfaceCapabilities.minBackbufferCount), mainSurfaceCapabilities.maxBackbufferCount);
+    mainSwapchainInfo.backbufferInfo.samplesPerTexel = 1;
+    mainSwapchainInfo.backbufferInfo.usage = vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource;
+    mainSwapchainInfo.backbufferInfo.dimensions.extent = mainSurfaceCapabilities.currentExtent;
+    mainSwapchainInfo.backbufferInfo.dimensions.subresource.layers = 1;
+    mainSwapchainInfo.backbufferInfo.dimensions.subresource.mips = 1;
+    mainSwapchainInfo.backbufferInfo.location = vkom::MemoryLocationFlags::GPU;
+    mainSwapchainInfo.preTransform = vkom::SurfaceTransformFlags::Identity;
+    mainSwapchainInfo.compositeAlpha = vkom::CompositeAlphaFlags::Opaque;
+    mainSwapchainInfo.surfaceFormatBits = gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNorm, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNorm, vkom::ColorSpaceFlags::All);
+    mainSwapchainInfo.presentModeFlags = gpuContext.adapter->querySurfacePresentModes(mainSurface);
+
+    vkom::ISwapchain* mainSwapchain;
+    assert(wsiDevice->createSwapchain(mainSurface, &mainSwapchainInfo, &mainSwapchain) == vkom::Result::Success);
+
     vkom::IHeap* cpuEndpointBufferHeap;
     assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuEndpointBufferHeap) == vkom::Result::Success);
 
@@ -148,48 +183,69 @@ int main(int argc, char** argv) {
     vkom::IHeap* cpuUniformBufferHeap;
     assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::UniformBuffer, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuUniformBufferHeap) == vkom::Result::Success);
 
-    vkom::DescriptorBindingInfo moduleDescriptorSetLayoutBindingInfos[2] = {};
-    moduleDescriptorSetLayoutBindingInfos[0].binding = 0;
-    moduleDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
-    moduleDescriptorSetLayoutBindingInfos[0].count = 1;
-    moduleDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
-    moduleDescriptorSetLayoutBindingInfos[1].binding = 1;
-    moduleDescriptorSetLayoutBindingInfos[1].flags = vkom::DescriptorFlags::StorageBuffer;
-    moduleDescriptorSetLayoutBindingInfos[1].count = 1;
-    moduleDescriptorSetLayoutBindingInfos[1].stages = vkom::ShaderStageFlags::Compute;
+    vkom::IHeap* gpuModuleTileTextureHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::None, vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource | vkom::TextureUsageFlags::Storage, vkom::MemoryLocationFlags::GPU, &gpuModuleTileTextureHeap) == vkom::Result::Success);
 
-    vkom::DescriptorSetLayoutInfo moduleDescriptorSetLayoutInfo = {};
-    moduleDescriptorSetLayoutInfo.bindingCount = 2;
-    moduleDescriptorSetLayoutInfo.bindings = &moduleDescriptorSetLayoutBindingInfos[0];
+    vkom::DescriptorBindingInfo moduleCommonUniformsDescriptorSetLayoutBindingInfos[1] = {};
+    moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].binding = 0;
+    moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
+    moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].count = 1;
+    moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
 
-    vkom::IDescriptorSetLayout* moduleDescriptorSetLayout;
-    assert(gpuContext.device->createDescriptorSetLayout(&moduleDescriptorSetLayoutInfo, &moduleDescriptorSetLayout) == vkom::Result::Success);
+    vkom::DescriptorSetLayoutInfo moduleCommonUniformsDescriptorSetLayoutInfo = {};
+    moduleCommonUniformsDescriptorSetLayoutInfo.bindingCount = 1;
+    moduleCommonUniformsDescriptorSetLayoutInfo.bindings = &moduleCommonUniformsDescriptorSetLayoutBindingInfos[0];
 
+    vkom::IDescriptorSetLayout* moduleCommonUniformsDescriptorSetLayout;
+    assert(gpuContext.device->createDescriptorSetLayout(&moduleCommonUniformsDescriptorSetLayoutInfo, &moduleCommonUniformsDescriptorSetLayout) == vkom::Result::Success);
+
+    vkom::DescriptorBindingInfo moduleTileDescriptorSetLayoutBindingInfos[1] = {};
+    moduleTileDescriptorSetLayoutBindingInfos[0].binding = 0;
+    moduleTileDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::StorageTexture;
+    moduleTileDescriptorSetLayoutBindingInfos[0].count = 1;
+    moduleTileDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
+
+    vkom::DescriptorSetLayoutInfo moduleTileDescriptorSetLayoutInfo = {};
+    moduleTileDescriptorSetLayoutInfo.bindingCount = 1;
+    moduleTileDescriptorSetLayoutInfo.bindings = &moduleTileDescriptorSetLayoutBindingInfos[0];
+
+    vkom::IDescriptorSetLayout* moduleTileDescriptorSetLayout;
+    assert(gpuContext.device->createDescriptorSetLayout(&moduleTileDescriptorSetLayoutInfo, &moduleTileDescriptorSetLayout) == vkom::Result::Success);
+
+    /* TODO: more accurate count of descriptor types */
     vkom::DescriptorPoolDescriptorInfo moduleDescriptorPoolDescriptorInfos[2] = {};
     moduleDescriptorPoolDescriptorInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
-    moduleDescriptorPoolDescriptorInfos[0].count = 1;
-    moduleDescriptorPoolDescriptorInfos[1].flags = vkom::DescriptorFlags::StorageBuffer;
-    moduleDescriptorPoolDescriptorInfos[1].count = 1;
+    moduleDescriptorPoolDescriptorInfos[0].count = 256;
+    moduleDescriptorPoolDescriptorInfos[1].flags = vkom::DescriptorFlags::StorageTexture;
+    moduleDescriptorPoolDescriptorInfos[1].count = 256;
 
+    /* TODO: more accurate count of descriptor sets */
     vkom::DescriptorPoolInfo moduleDescriptorPoolInfo = {};
-    moduleDescriptorPoolInfo.maxDescriptorSets = 1;
+    moduleDescriptorPoolInfo.maxDescriptorSets = 256;
     moduleDescriptorPoolInfo.descriptorCount = 2;
     moduleDescriptorPoolInfo.descriptors = &moduleDescriptorPoolDescriptorInfos[0];
 
     vkom::IDescriptorPool* moduleDescriptorPool;
     assert(gpuContext.device->createDescriptorPool(&moduleDescriptorPoolInfo, &moduleDescriptorPool) == vkom::Result::Success);
 
-    vkom::IDescriptorSet* moduleDescriptorSet;
-    assert(moduleDescriptorPool->allocateDescriptorSets(moduleDescriptorSetLayout, 1, &moduleDescriptorSet) == vkom::Result::Success);
+    vkom::IDescriptorSet* moduleCommonUniformsDescriptorSet;
+    assert(moduleDescriptorPool->allocateDescriptorSets(moduleCommonUniformsDescriptorSetLayout, 1, &moduleCommonUniformsDescriptorSet) == vkom::Result::Success);
+
+    vkom::IDescriptorSet* moduleTileDescriptorSet;
+    assert(moduleDescriptorPool->allocateDescriptorSets(moduleTileDescriptorSetLayout, 1, &moduleTileDescriptorSet) == vkom::Result::Success);
 
     vkom::PushConstantRange modulePipelineLayoutPushConstantRanges[1] = {};
     modulePipelineLayoutPushConstantRanges[0].offset = 0;
     modulePipelineLayoutPushConstantRanges[0].size = sizeof(PushConstantAudioBufferDescriptor);
     modulePipelineLayoutPushConstantRanges[0].stages = vkom::ShaderStageFlags::Compute;
 
+    vkom::IDescriptorSetLayout* modulePipelineLayoutDescriptorSetLayouts[2] = {};
+    modulePipelineLayoutDescriptorSetLayouts[0] = moduleCommonUniformsDescriptorSetLayout;
+    modulePipelineLayoutDescriptorSetLayouts[1] = moduleTileDescriptorSetLayout;
+
     vkom::PipelineLayoutInfo modulePipelineLayoutInfo = {};
-    modulePipelineLayoutInfo.descriptorSetLayoutCount = 1;
-    modulePipelineLayoutInfo.descriptorSetLayouts = &moduleDescriptorSetLayout;
+    modulePipelineLayoutInfo.descriptorSetLayoutCount = 2;
+    modulePipelineLayoutInfo.descriptorSetLayouts = &modulePipelineLayoutDescriptorSetLayouts[0];
     modulePipelineLayoutInfo.pushConstantRangeCount = 1;
     modulePipelineLayoutInfo.pushConstantRanges = &modulePipelineLayoutPushConstantRanges[0];
 
@@ -200,8 +256,44 @@ int main(int argc, char** argv) {
     vkom::IComputePipeline* defaultModulePipeline = loadModuleAndPipeline(defaultModule, gpuContext.device, modulePipelineLayout, "module.hlsl.spv");
     assert(defaultModulePipeline != nullptr);
 
-    vkom::IFence* batchFinishedFence;
-    assert(gpuContext.device->acquireFence(false, &batchFinishedFence) == vkom::Result::Success);
+    vkom::TextureInfo gpuModuleTileTextureInfo = {};
+    gpuModuleTileTextureInfo.format = vkom::Format::RGBA8UnsignedNorm;
+    gpuModuleTileTextureInfo.samplesPerTexel = 1;
+    gpuModuleTileTextureInfo.usage = vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource | vkom::TextureUsageFlags::Storage;
+    gpuModuleTileTextureInfo.dimensions.extent.width = 512;
+    gpuModuleTileTextureInfo.dimensions.extent.height = 512;
+    gpuModuleTileTextureInfo.dimensions.subresource.layers = 1;
+    gpuModuleTileTextureInfo.dimensions.subresource.mips = 1;
+    gpuModuleTileTextureInfo.location = vkom::MemoryLocationFlags::GPU;
+
+    vkom::ITexture* gpuModuleTileTexture;
+    assert(gpuModuleTileTextureHeap->createTexture(&gpuModuleTileTextureInfo, &gpuModuleTileTexture) == vkom::Result::Success);
+
+    vkom::TextureViewInfo gpuModuleTileTextureViewInfo = {};
+    gpuModuleTileTextureViewInfo.format = gpuModuleTileTextureInfo.format;
+    gpuModuleTileTextureViewInfo.type = vkom::TextureViewType::D2;
+    gpuModuleTileTextureViewInfo.aspectFlags = vkom::TextureAspectFlags::Color;
+    gpuModuleTileTextureViewInfo.subresourceDimensions.layers = 1;
+    gpuModuleTileTextureViewInfo.subresourceDimensions.mips = 1;
+    gpuModuleTileTextureViewInfo.subresourcePosition.layer = 0;
+    gpuModuleTileTextureViewInfo.subresourcePosition.mip = 0;
+
+    vkom::ITextureView* gpuModuleTileTextureView;
+    assert(gpuModuleTileTexture->createView(&gpuModuleTileTextureViewInfo, &gpuModuleTileTextureView) == vkom::Result::Success);
+
+    vkom::IFence* audioComputeBatchFinishedFence;
+    assert(gpuContext.device->acquireFence(false, &audioComputeBatchFinishedFence) == vkom::Result::Success);
+
+    vkom::IFence* presentBatchFinishedFence;
+    assert(gpuContext.device->acquireFence(false, &presentBatchFinishedFence) == vkom::Result::Success);
+
+    vkom::IPresentFence* mainSwapchainPresentationFinishedFence = nullptr;
+
+    vkom::ISemaphore* mainBackbufferAcquisitionSemaphore;
+    assert(gpuContext.device->acquireSemaphore(false, &mainBackbufferAcquisitionSemaphore) == vkom::Result::Success);
+
+    vkom::ISemaphore* mainBackbufferRenderFinishedSemaphore;
+    assert(gpuContext.device->acquireSemaphore(false, &mainBackbufferRenderFinishedSemaphore) == vkom::Result::Success);
 
     vkom::BufferInfo cpuEndpointBufferInfo = {};
     cpuEndpointBufferInfo.size = sizeof(float) * ((INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 512) / 1024) * 1024;
@@ -345,6 +437,14 @@ int main(int argc, char** argv) {
     uint64_t globalID = 0;
     uint32_t previousPlayedUntil = 0;
 
+    bool presentInProgress = false;
+    bool audioComputeBatchInProgress = false;
+    vkom::ICommandEncoder* audioComputeEncoder = nullptr;
+    vkom::ICommandBatch* audioComputeBatch = nullptr;
+
+    vkom::ICommandEncoder* presentEncoder = nullptr;
+    vkom::ICommandBatch* presentBatch = nullptr;
+
     bool running = true;
     while (running) {
         SDL_Event event;
@@ -369,83 +469,41 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (playbackBuffer.samplesPlayedSinceLastProduction >= playbackBuffer.sampleCount / 2 || playbackBuffer.totalSamplesPlayed >= playbackBuffer.totalSamplesProduced) {
-            vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
-            vkom::IResourceView* cpuEndpointBufferResourceView = cpuEndpointBufferView->queryInterface<vkom::IResourceView>();
+        if (presentInProgress) {
+            if (mainSwapchainPresentationFinishedFence != nullptr && mainSwapchainPresentationFinishedFence->status()) {
+                mainSwapchainPresentationFinishedFence->release();
+                mainSwapchainPresentationFinishedFence = nullptr;
+                
+                presentInProgress = false;
+            }
+        }
 
-            vkom::DescriptorWrite moduleDescriptorSetWrites[2] = {};
-            moduleDescriptorSetWrites[0].binding = 0;
-            moduleDescriptorSetWrites[0].element = 0;
-            moduleDescriptorSetWrites[0].count = 1;
-            moduleDescriptorSetWrites[0].views = &cpuUniformBufferResourceView;
-            moduleDescriptorSetWrites[1].binding = 1;
-            moduleDescriptorSetWrites[1].element = 0;
-            moduleDescriptorSetWrites[1].count = 1;
-            moduleDescriptorSetWrites[1].views = &cpuEndpointBufferResourceView;
+        vkom::IBackbuffer* mainBackbuffer = nullptr;
+        if (!presentInProgress) {
+            vkom::SemaphorePoint mainBackbufferAcquisitionSignal = {};
+            mainBackbufferAcquisitionSignal.semaphore = mainBackbufferAcquisitionSemaphore;
 
-            moduleDescriptorSet->write(2, &moduleDescriptorSetWrites[0]);
+            uint32_t mainBackbufferIndex;
+            vkom::Result mainBackbufferAcquisitionResult = mainSwapchain->acquireNextIndex(&mainBackbufferAcquisitionSignal, nullptr, &mainBackbufferIndex);
+            /* TODO: handle resize */
+            assert(mainBackbufferAcquisitionResult == vkom::Result::Success);
 
-            vkom::ICommandEncoder* encoder;
-            assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
+            mainBackbuffer = mainSwapchain->enumerateBackbuffers(mainBackbufferIndex);
+            assert(mainBackbuffer != nullptr);
+        }
 
-            vkom::ITransferDestinationBuffer* cpuEndpointBufferTD = cpuEndpointBuffer->queryInterface<vkom::ITransferDestinationBuffer>();
-            assert(cpuEndpointBufferTD != nullptr);
+        if (audioComputeBatchFinishedFence->status()) {
+            assert(audioComputeBatchFinishedFence->reset() == vkom::Result::Success);
 
-            vkom::BufferFill cpuEndpointBufferFill = {};
-            cpuEndpointBufferFill.dstOffset = 0;
-            cpuEndpointBufferFill.size = cpuEndpointBufferInfo.size;
-            cpuEndpointBufferFill.word = 0;
+            if (audioComputeBatch != nullptr) {
+                audioComputeBatch->discard();
+                audioComputeEncoder->release();
 
-            encoder->fillBuffer(cpuEndpointBufferTD, &cpuEndpointBufferFill);
+                audioComputeBatch = nullptr;
+                audioComputeEncoder = nullptr;
+            }
 
-            vkom::ComputePassDescriptor cpDescriptor = {};
-
-            vkom::IComputePass* cp = encoder->beginComputePass(&cpDescriptor);
-            assert(cp != nullptr);
-
-            cp->bindPipeline(defaultModulePipeline);
-            cp->bindDescriptorSet(modulePipelineLayout, 0, moduleDescriptorSet, 0, nullptr);
-
-            Uniforms uniforms = {};
-            uniforms.globalID = globalID;
-            uniforms.globalTime = static_cast<float>(globalID) / static_cast<float>(maPlaybackDeviceConfig.sampleRate);
-            uniforms.dispatchWidth = (INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 1023) / 1024;
-            uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
-            uniforms.inverseSampleRate = 1.0f / static_cast<float>(uniforms.sampleRate);
-            uniforms.buffer.bounds[0] = -1.0f;
-            uniforms.buffer.bounds[1] = 1.0f;
-            uniforms.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
-
-            //std::printf("%u\n", globalID);
-
-            void* mappedUniformBuffer = cpuUniformBuffer->map();
-            std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
-            cpuUniformBuffer->unmap();
-
-            PushConstants pushConstants = {};
-            pushConstants.buffer.address = cpuEndpointBufferDA->deviceAddress();
-            pushConstants.buffer.bounds[0] = uniforms.buffer.bounds[0];
-            pushConstants.buffer.bounds[1] = uniforms.buffer.bounds[1];
-            pushConstants.buffer.count = uniforms.buffer.count;
-
-            cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants);
-            cp->dispatch(uniforms.dispatchWidth, 1, 1);
-
-            cp->end();
-            cp = nullptr;
-
-            vkom::ICommandBatch* batch;
-            assert(encoder->batch(&batch) == vkom::Result::Success);
-
-            vkom::CommandBatchSubmitInfo submitInfo = {};
-            submitInfo.signalFence = batchFinishedFence;
-
-            assert(batch->submit(&submitInfo) == vkom::Result::Success);
-            assert(batchFinishedFence->wait() == vkom::Result::Success);
-            assert(batchFinishedFence->reset() == vkom::Result::Success);
-
-            batch->discard();
-            encoder->release();
+            audioComputeBatchInProgress = false;
 
             uint32_t newStart = playbackBuffer.end % playbackBuffer.sampleCount;
             uint32_t producedSampleCount = cpuEndpointBufferInfo.size / sizeof(float);
@@ -488,6 +546,272 @@ int main(int argc, char** argv) {
             playbackBuffer.samplesPlayedSinceLastProduction = 0;
             playbackBuffer.totalSamplesProduced += producedSampleCount;
             cpuEndpointBuffer->unmap();
+        }
+
+        if (!audioComputeBatchInProgress && (playbackBuffer.samplesPlayedSinceLastProduction >= playbackBuffer.sampleCount / 2 || playbackBuffer.totalSamplesPlayed >= playbackBuffer.totalSamplesProduced)) {
+            vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
+
+            vkom::DescriptorWrite moduleCommonUniformsDescriptorSetWrite = {};
+            moduleCommonUniformsDescriptorSetWrite.binding = 0;
+            moduleCommonUniformsDescriptorSetWrite.element = 0;
+            moduleCommonUniformsDescriptorSetWrite.count = 1;
+            moduleCommonUniformsDescriptorSetWrite.views = &cpuUniformBufferResourceView;
+
+            moduleCommonUniformsDescriptorSet->write(1, &moduleCommonUniformsDescriptorSetWrite);
+
+            vkom::DescriptorTextureInfo gpuModuleTileDescriptorTextureInfo = {};
+            gpuModuleTileDescriptorTextureInfo.layout = vkom::TextureLayout::General;
+
+            vkom::IResourceView* gpuModuleTileTextureResourceView = gpuModuleTileTextureView->queryInterface<vkom::IResourceView>();
+
+            vkom::DescriptorWrite moduleTileDescriptorSetWrite = {};
+            moduleTileDescriptorSetWrite.binding = 0;
+            moduleTileDescriptorSetWrite.element = 0;
+            moduleTileDescriptorSetWrite.count = 1;
+            moduleTileDescriptorSetWrite.textureInfos = &gpuModuleTileDescriptorTextureInfo;
+            moduleTileDescriptorSetWrite.views = &gpuModuleTileTextureResourceView;
+
+            moduleTileDescriptorSet->write(1, &moduleTileDescriptorSetWrite);
+
+            assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&audioComputeEncoder) == vkom::Result::Success);
+
+            vkom::ITransferDestinationBuffer* cpuEndpointBufferTD = cpuEndpointBuffer->queryInterface<vkom::ITransferDestinationBuffer>();
+            assert(cpuEndpointBufferTD != nullptr);
+
+            vkom::BufferFill cpuEndpointBufferFill = {};
+            cpuEndpointBufferFill.dstOffset = 0;
+            cpuEndpointBufferFill.size = cpuEndpointBufferInfo.size;
+            cpuEndpointBufferFill.word = 0;
+
+            audioComputeEncoder->fillBuffer(cpuEndpointBufferTD, &cpuEndpointBufferFill);
+
+            vkom::TextureTransition moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute = {};
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.general.srcStage = vkom::PipelineStageFlags::Transfer;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.general.dstStage = vkom::PipelineStageFlags::ComputeShader;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.transfer.oldFamily = gpuContext.presentQueue->family();
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.transfer.newFamily = gpuContext.audioComputeQueue->family();
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.oldLayout = vkom::TextureLayout::Undefined;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.newLayout = vkom::TextureLayout::General;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.aspectFlags = vkom::TextureAspectFlags::Color;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.subresourcePosition.layer = 0;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.subresourcePosition.mip = 0;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.subresourceDimensions.layers = 1;
+            moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute.subresourceDimensions.mips = 1;
+
+            audioComputeEncoder->transitionTexture(gpuModuleTileTexture, &moduleTileTransitionToGeneralAndAcquireOwnershipFromPresentToCompute);
+
+            vkom::ColorTextureClear moduleTileClear = {};
+            moduleTileClear.layout = vkom::TextureLayout::General;
+            moduleTileClear.color[0] = 0.02f;
+            moduleTileClear.color[1] = 0.02f;
+            moduleTileClear.color[2] = 0.02f;
+            moduleTileClear.color[3] = 1.0f;
+            moduleTileClear.subresourceOffset.layer = 0;
+            moduleTileClear.subresourceOffset.mip = 0;
+            moduleTileClear.subresourceRange.layers = 1;
+            moduleTileClear.subresourceRange.mips = 1;
+
+            audioComputeEncoder->clearColorTexture(gpuModuleTileTexture->queryInterface<vkom::ITransferDestinationTexture>(), &moduleTileClear);
+
+            vkom::ComputePassDescriptor cpDescriptor = {};
+
+            vkom::IComputePass* cp = audioComputeEncoder->beginComputePass(&cpDescriptor);
+            assert(cp != nullptr);
+
+            cp->bindPipeline(defaultModulePipeline);
+            cp->bindDescriptorSet(modulePipelineLayout, 0, moduleCommonUniformsDescriptorSet, 0, nullptr);
+            cp->bindDescriptorSet(modulePipelineLayout, 1, moduleTileDescriptorSet, 0, nullptr);
+
+            Uniforms uniforms = {};
+            uniforms.globalID = globalID;
+            uniforms.globalTime = static_cast<float>(globalID) / static_cast<float>(maPlaybackDeviceConfig.sampleRate);
+            uniforms.dispatchWidth = (INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 1023) / 1024;
+            uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
+            uniforms.inverseSampleRate = 1.0f / static_cast<float>(uniforms.sampleRate);
+
+            //std::printf("%u\n", globalID);
+
+            void* mappedUniformBuffer = cpuUniformBuffer->map();
+            std::memcpy(mappedUniformBuffer, &uniforms, sizeof(Uniforms));
+            cpuUniformBuffer->unmap();
+
+            PushConstants pushConstants = {};
+            pushConstants.buffer.address = cpuEndpointBufferDA->deviceAddress();
+            pushConstants.buffer.count = INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
+            pushConstants.buffer.bounds[0] = -1.0f;
+            pushConstants.buffer.bounds[1] = 1.0f;
+
+            cp->pushConstants(modulePipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(pushConstants), &pushConstants);
+            cp->dispatch(uniforms.dispatchWidth, 1, 1);
+
+            cp->end();
+            cp = nullptr;
+
+            vkom::TextureTransition moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent = {};
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.general.srcStage = vkom::PipelineStageFlags::ComputeShader;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.general.dstStage = vkom::PipelineStageFlags::Transfer;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.transfer.oldFamily = gpuContext.audioComputeQueue->family();
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.transfer.newFamily = gpuContext.presentQueue->family();
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.oldLayout = vkom::TextureLayout::General;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.newLayout = vkom::TextureLayout::TransferSource;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.aspectFlags = vkom::TextureAspectFlags::Color;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.subresourcePosition.layer = 0;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.subresourcePosition.mip = 0;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.subresourceDimensions.layers = 1;
+            moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent.subresourceDimensions.mips = 1;
+
+            audioComputeEncoder->transitionTexture(gpuModuleTileTexture, &moduleTileTransitionFromGeneralToTransferSourceAndReleaseOwnershipFromComputeToPresent);
+
+            assert(audioComputeEncoder->batch(&audioComputeBatch) == vkom::Result::Success);
+
+            vkom::CommandBatchSubmitInfo submitInfo = {};
+            submitInfo.signalFence = audioComputeBatchFinishedFence;
+
+            assert(audioComputeBatch->submit(&submitInfo) == vkom::Result::Success);
+        }
+
+        if (presentBatchFinishedFence->status()) {
+            presentBatchFinishedFence->reset();
+
+            presentBatch->discard();
+            presentEncoder->release();
+
+            presentBatch = nullptr;
+            presentEncoder = nullptr;
+        }
+
+        if (mainBackbuffer != nullptr && presentEncoder == nullptr && mainSwapchainPresentationFinishedFence == nullptr) {
+            assert(gpuContext.presentQueue->acquireCommandEncoder(&presentEncoder) == vkom::Result::Success);
+
+            vkom::TextureTransition mainBackbufferTransitionToTransferDestination = {};
+            mainBackbufferTransitionToTransferDestination.general.srcStage = vkom::PipelineStageFlags::TopOfPipe;
+            mainBackbufferTransitionToTransferDestination.general.dstStage = vkom::PipelineStageFlags::TopOfPipe;
+            mainBackbufferTransitionToTransferDestination.transfer.oldFamily = gpuContext.presentQueue->family();
+            mainBackbufferTransitionToTransferDestination.transfer.newFamily = gpuContext.presentQueue->family();
+            mainBackbufferTransitionToTransferDestination.oldLayout = vkom::TextureLayout::Undefined;
+            mainBackbufferTransitionToTransferDestination.newLayout = vkom::TextureLayout::TransferDestination;
+            mainBackbufferTransitionToTransferDestination.aspectFlags = vkom::TextureAspectFlags::Color;
+            mainBackbufferTransitionToTransferDestination.subresourcePosition.layer = 0;
+            mainBackbufferTransitionToTransferDestination.subresourcePosition.mip = 0;
+            mainBackbufferTransitionToTransferDestination.subresourceDimensions.layers = 1;
+            mainBackbufferTransitionToTransferDestination.subresourceDimensions.mips = 1;
+
+            presentEncoder->transitionTexture(mainBackbuffer, &mainBackbufferTransitionToTransferDestination);
+
+            vkom::ColorTextureClear mainBackbufferClear = {};
+            mainBackbufferClear.layout = vkom::TextureLayout::TransferDestination;
+            mainBackbufferClear.color[0] = 1.0f;
+            mainBackbufferClear.color[1] = 0.0f;
+            mainBackbufferClear.color[2] = 1.0f;
+            mainBackbufferClear.color[3] = 1.0f;
+            mainBackbufferClear.subresourceOffset.layer = 0;
+            mainBackbufferClear.subresourceOffset.mip = 0;
+            mainBackbufferClear.subresourceRange.layers = 1;
+            mainBackbufferClear.subresourceRange.mips = 1;
+
+            presentEncoder->clearColorTexture(mainBackbuffer->queryInterface<vkom::ITransferDestinationTexture>(), &mainBackbufferClear);
+
+            vkom::TextureTransition moduleTileTransitionTransferSourceAndAcquireOwnershipFromComputeToPresent = {};
+            mainBackbufferTransitionToTransferDestination.general.srcStage = vkom::PipelineStageFlags::ComputeShader;
+            mainBackbufferTransitionToTransferDestination.general.dstStage = vkom::PipelineStageFlags::Transfer;
+            mainBackbufferTransitionToTransferDestination.transfer.oldFamily = gpuContext.audioComputeQueue->family();
+            mainBackbufferTransitionToTransferDestination.transfer.newFamily = gpuContext.presentQueue->family();
+            mainBackbufferTransitionToTransferDestination.oldLayout = vkom::TextureLayout::Undefined;
+            mainBackbufferTransitionToTransferDestination.newLayout = vkom::TextureLayout::TransferSource;
+            mainBackbufferTransitionToTransferDestination.aspectFlags = vkom::TextureAspectFlags::Color;
+            mainBackbufferTransitionToTransferDestination.subresourcePosition.layer = 0;
+            mainBackbufferTransitionToTransferDestination.subresourcePosition.mip = 0;
+            mainBackbufferTransitionToTransferDestination.subresourceDimensions.layers = 1;
+            mainBackbufferTransitionToTransferDestination.subresourceDimensions.mips = 1;
+
+            presentEncoder->transitionTexture(gpuModuleTileTexture, &mainBackbufferTransitionToTransferDestination);
+
+            vkom::TextureBlit blitModuleTileToMainBackbuffer = {};
+            blitModuleTileToMainBackbuffer.srcLayout = vkom::TextureLayout::TransferSource;
+            blitModuleTileToMainBackbuffer.srcPositions[0].xyz.x = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[0].xyz.y = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[0].xyz.z = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[0].subresource.layer = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[0].subresource.mip = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[1].xyz.x = gpuModuleTileTextureInfo.dimensions.extent.width;
+            blitModuleTileToMainBackbuffer.srcPositions[1].xyz.y = gpuModuleTileTextureInfo.dimensions.extent.height;
+            blitModuleTileToMainBackbuffer.srcPositions[1].xyz.z = std::max(1u, gpuModuleTileTextureInfo.dimensions.extent.depth);
+            blitModuleTileToMainBackbuffer.srcPositions[1].subresource.layer = 0;
+            blitModuleTileToMainBackbuffer.srcPositions[1].subresource.mip = 1;
+            blitModuleTileToMainBackbuffer.dstLayout = vkom::TextureLayout::TransferDestination;
+            blitModuleTileToMainBackbuffer.dstPositions[0].xyz.x = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[0].xyz.y = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[0].xyz.z = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[0].subresource.layer = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[0].subresource.mip = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[1].xyz.x = mainSurfaceCapabilities.currentExtent.width;
+            blitModuleTileToMainBackbuffer.dstPositions[1].xyz.y = mainSurfaceCapabilities.currentExtent.height;
+            blitModuleTileToMainBackbuffer.dstPositions[1].xyz.z = std::max(1u, mainSurfaceCapabilities.currentExtent.depth);
+            blitModuleTileToMainBackbuffer.dstPositions[1].subresource.layer = 0;
+            blitModuleTileToMainBackbuffer.dstPositions[1].subresource.mip = 1;
+            blitModuleTileToMainBackbuffer.aspectFlags = vkom::TextureAspectFlags::Color;
+            blitModuleTileToMainBackbuffer.filter = vkom::TexelFilter::Nearest;
+
+            presentEncoder->blitTexture(mainBackbuffer->queryInterface<vkom::ITransferDestinationTexture>(), gpuModuleTileTexture->queryInterface<vkom::ITransferSourceTexture>(), &blitModuleTileToMainBackbuffer);
+
+            vkom::TextureTransition moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute = {};
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.general.srcStage = vkom::PipelineStageFlags::Transfer;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.general.dstStage = vkom::PipelineStageFlags::ComputeShader;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.transfer.oldFamily = gpuContext.presentQueue->family();
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.transfer.newFamily = gpuContext.audioComputeQueue->family();
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.oldLayout = vkom::TextureLayout::TransferSource;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.newLayout = vkom::TextureLayout::General;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.aspectFlags = vkom::TextureAspectFlags::Color;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.subresourcePosition.layer = 0;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.subresourcePosition.mip = 0;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.subresourceDimensions.layers = 1;
+            moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute.subresourceDimensions.mips = 1;
+
+            presentEncoder->transitionTexture(gpuModuleTileTexture, &moduleTileTransitionFromTransferSourceToGeneralAndReleaseOwnershipFromPresentToCompute);
+
+            vkom::TextureTransition mainBackbufferTransitionFromTransferDestinationToPresentSource = {};
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.general.srcStage = vkom::PipelineStageFlags::Transfer;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.general.dstStage = vkom::PipelineStageFlags::TopOfPipe;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.transfer.oldFamily = gpuContext.presentQueue->family();
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.transfer.newFamily = gpuContext.presentQueue->family();
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.oldLayout = vkom::TextureLayout::TransferDestination;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.newLayout = vkom::TextureLayout::PresentSource;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.aspectFlags = vkom::TextureAspectFlags::Color;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.subresourcePosition.layer = 0;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.subresourcePosition.mip = 0;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.subresourceDimensions.layers = 1;
+            mainBackbufferTransitionFromTransferDestinationToPresentSource.subresourceDimensions.mips = 1;
+
+            presentEncoder->transitionTexture(mainBackbuffer, &mainBackbufferTransitionFromTransferDestinationToPresentSource);
+
+            assert(presentEncoder->batch(&presentBatch) == vkom::Result::Success);
+
+            vkom::CommandBatchSubmitWaitInfo presentBatchSubmitWaits[1] = {};
+            presentBatchSubmitWaits[0].point.semaphore = mainBackbufferAcquisitionSemaphore;
+            presentBatchSubmitWaits[0].stageFlags = vkom::PipelineStageFlags::TopOfPipe;
+
+            vkom::CommandBatchSubmitSignalInfo presentBatchSubmitSignals[1] = {};
+            presentBatchSubmitSignals[0].point.semaphore = mainBackbufferRenderFinishedSemaphore;
+
+            vkom::CommandBatchSubmitInfo presentBatchSubmitInfo = {};
+            presentBatchSubmitInfo.waitCount = 1;
+            presentBatchSubmitInfo.waits = &presentBatchSubmitWaits[0];
+            presentBatchSubmitInfo.signalCount = 1;
+            presentBatchSubmitInfo.signals = &presentBatchSubmitSignals[0];
+            presentBatchSubmitInfo.signalFence = presentBatchFinishedFence;
+
+            assert(presentBatch->submit(&presentBatchSubmitInfo) == vkom::Result::Success);
+
+            vkom::PresentInfo presentInfo = {};
+            presentInfo.waitCount = 1;
+            presentInfo.waits = &presentBatchSubmitSignals[0].point;
+
+            vkom::Result mainSwapchainPresentationResult = mainSwapchain->present(gpuContext.presentQueue, mainBackbuffer, &presentInfo, &mainSwapchainPresentationFinishedFence);
+            /* TODO: */
+            assert(mainSwapchainPresentationResult == vkom::Result::Success);
+
+            presentInProgress = true;
+            mainBackbuffer->release();
         }
 
         globalID = playbackBuffer.totalSamplesProduced;//totalCopiableSampleCount / maPlaybackDevice.playback.channels;
