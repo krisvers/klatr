@@ -9,9 +9,115 @@
 #include <cassert>
 #include <chrono>
 #include <filesystem>
+#include <mutex>
+#include <semaphore>
 
-#define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 44100 * 100
-#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 4410 * 800
+template<typename T, size_t N>
+class BoundedQueue {
+private:
+    T* _data;
+
+    size_t _producerOffset = 0;
+    size_t _consumerOffset = 0;
+
+    std::counting_semaphore<N> _full{0};
+    std::counting_semaphore<N> _empty{N};
+    std::mutex _lock = {};
+
+public:
+    BoundedQueue() {
+        _data = new T[N];
+    }
+
+    ~BoundedQueue() {
+        delete[] _data;
+    }
+
+    T const* data() const {
+        return _data;
+    }
+
+    T* data() {
+        return _data;
+    }
+
+    size_t capacity() const {
+        return N;
+    }
+
+    size_t producerOffset() const {
+        return _producerOffset;
+    }
+
+    size_t consumerOffset() const {
+        return _consumerOffset;
+    }
+
+    bool produce(size_t count, T const* data, bool blocking = true) {
+        if (blocking) {
+            _empty.acquire();
+        } else {
+            if (!_empty.try_acquire()) {
+                return false;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(_lock);
+
+            size_t copyRegions = ((_producerOffset % N) + count + N - 1) / N;
+            assert(copyRegions <= 2);
+
+            size_t firstCopyCount = std::min(N - (_producerOffset % N), count);
+            size_t secondCopyCount = count - firstCopyCount;
+
+            std::memcpy(&_data[_producerOffset % N], data, firstCopyCount * sizeof(T));
+            if (secondCopyCount != 0) {
+                std::memcpy(&_data[0], &data[firstCopyCount], secondCopyCount * sizeof(T));
+            }
+
+            _producerOffset += count;
+        }
+
+        _full.release();
+        return true;
+    }
+
+    size_t consume(size_t count, T* data, bool blocking = true) {
+        if (blocking) {
+            _full.acquire();
+        } else {
+            if (!_full.try_acquire()) {
+                return 0;
+            }
+        }
+
+        count = std::min(std::min(_producerOffset - _consumerOffset, N), count);
+
+        {
+            std::lock_guard<std::mutex> guard(_lock);
+
+            size_t copyRegions = ((_consumerOffset % N) + count + N - 1) / N;
+            assert(copyRegions <= 2);
+
+            size_t firstCopyCount = std::min(N - (_consumerOffset % N), count);
+            size_t secondCopyCount = count - firstCopyCount;
+
+            std::memcpy(&data[0], &_data[_consumerOffset % N], firstCopyCount * sizeof(T));
+            if (secondCopyCount != 0) {
+                std::memcpy(&data[firstCopyCount], &_data[0], secondCopyCount * sizeof(T));
+            }
+
+            _consumerOffset += count;
+        }
+
+        _empty.release();
+        return count;
+    }
+};
+
+#define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 44100 * 10
+#define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 16384
 
 //struct UniformAudioBufferDescriptor {
 //    uint32_t count;
@@ -38,19 +144,7 @@ struct PushConstants {
     PushConstantAudioBufferDescriptor buffer;
 };
 
-struct PlaybackBuffer {
-    uint32_t sampleCount;
-    float* samples;
-
-    uint32_t start;
-    uint32_t end;
-
-    uint32_t nextPredictedPlay;
-    uint32_t playedUntil;
-    uint64_t samplesPlayedSinceLastProduction;
-    uint64_t totalSamplesPlayed;
-    uint64_t totalSamplesProduced;
-};
+using PlaybackBuffer = BoundedQueue<float, INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT>;
 
 /* adapted from old test code from krisvers/vkom */
 std::vector<uint32_t> loadFile(const char* path) {
@@ -129,6 +223,33 @@ vkom::IComputePipeline* loadModuleAndPipeline(ModuleInfo& moduleInfo, vkom::IDev
     return modulePipeline;
 }
 
+vkom::SurfaceWSIInfo surfaceWSIInfoFromSDLWindow(SDL_Window* window) {
+    vkom::SurfaceWSIInfo info = {};
+
+    #ifdef VKOM_PLATFORM_FAMILY_NT
+    info.type = vkom::SurfaceWSIType::Win32;
+    info.windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    info.displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr));
+    #elif defined(VKOM_PLATFORM_FAMILY_APPLE)
+    SDL_MetalView view = SDL_Metal_CreateView(window);
+
+    info.type = vkom::SurfaceWSIType::Metal;
+    info.windowHandle = reinterpret_cast<uint64_t>(SDL_Metal_GetLayer(view));
+    #else
+    info.type = vkom::SurfaceWSIType::Xlib;
+    info.windowHandle = reinterpret_cast<uint64_t>(SDL_GetNumberProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, nullptr));
+    info.displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+
+    if (info.windowHandle == 0) {
+        info.type = vkom::SurfaceWSIType::Wayland;
+        info.windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr));
+        info.displayHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr));
+    }
+    #endif
+
+    return info;
+}
+
 int main(int argc, char** argv) {
     klatr::gpu::Context gpuContext = klatr::gpu::Context(true);
     gpuContext.instance->setLogCallback([](vkom::IInstance* instance, void* userData, vkom::DebugMessageSeverityFlags severity, vkom::DebugMessageTypeFlags types, const char* message) {
@@ -147,10 +268,7 @@ int main(int argc, char** argv) {
     assert(wsiDevice != nullptr);
 
     /* TODO: other platforms */
-    vkom::SurfaceWSIInfo mainSurfaceInfo = {};
-    mainSurfaceInfo.type = vkom::SurfaceWSIType::Win32;
-    mainSurfaceInfo.windowHandle = reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(mainWindow), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
-    mainSurfaceInfo.displayHandle= reinterpret_cast<uint64_t>(SDL_GetPointerProperty(SDL_GetWindowProperties(mainWindow), SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr));
+    vkom::SurfaceWSIInfo mainSurfaceInfo = surfaceWSIInfoFromSDLWindow(mainWindow);
 
     vkom::ISurface* mainSurface;
     assert(wsiInstance->createSurface(&mainSurfaceInfo, &mainSurface) == vkom::Result::Success);
@@ -335,8 +453,6 @@ int main(int argc, char** argv) {
     assert(cpuUniformBufferUBO != nullptr);
 
     PlaybackBuffer playbackBuffer = {};
-    playbackBuffer.sampleCount = INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT;
-    playbackBuffer.samples = new float[playbackBuffer.sampleCount];
 
     ma_log maContextLogger = {};
     maContextLogger.callbacks[0].onLog = [](void* user, ma_uint32 level, const char* message) {
@@ -358,72 +474,13 @@ int main(int argc, char** argv) {
     maPlaybackDeviceConfig.dataCallback = [](ma_device* device, void* output, void const* input, ma_uint32 frameCount) {
         assert(device->playback.format == ma_format_f32);
 
-        ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(-2) %u/%u/0x%lx requested (frames/samples/bytes)\n", frameCount, frameCount * device->playback.channels, frameCount * device->playback.channels * sizeof(float));
-
         PlaybackBuffer* playbackBuffer = reinterpret_cast<PlaybackBuffer*>(device->pUserData);
         if (playbackBuffer == nullptr) {
             return;
         }
 
-        uint32_t playbackStart = playbackBuffer->nextPredictedPlay;
-        uint32_t playbackEnd = playbackBuffer->end;
-        uint32_t playbackSampleCount = playbackBuffer->sampleCount;
-
-        uint32_t requestedFrameCount = frameCount;
-        uint32_t availableSampleCounts[2] = {};
-        if (playbackEnd <= playbackStart) {
-            availableSampleCounts[0] = playbackSampleCount - playbackStart;
-            availableSampleCounts[1] = playbackEnd;
-        } else {
-            availableSampleCounts[0] = playbackEnd - playbackStart;
-            availableSampleCounts[1] = 0;
-        }
-
-        uint32_t channels = device->playback.channels;
-        uint32_t availableFrameCounts[2] = {};
-        availableFrameCounts[0] = availableSampleCounts[0] / channels;
-        availableFrameCounts[1] = availableSampleCounts[1] / channels;
-
-        uint32_t totalAvailableFrameCount = availableFrameCounts[0] + availableFrameCounts[1];
-        uint32_t totalCopiableFrameCount = std::min(totalAvailableFrameCount, requestedFrameCount);
-
-        uint32_t copiableFrameCounts[2] = {};
-        copiableFrameCounts[0] = std::min(availableFrameCounts[0], totalCopiableFrameCount);
-        if (totalCopiableFrameCount > availableFrameCounts[0]) {
-            copiableFrameCounts[1] = (totalCopiableFrameCount - availableFrameCounts[0]);
-        }
-
-        if (copiableFrameCounts[0] == 0) {
-            ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(-1) no samples available; played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
-            return;
-        }
-
-        float* playbackBufferStarts[2] = {};
-        playbackBufferStarts[0] = &playbackBuffer->samples[playbackStart];
-
-        float* outputStarts[2] = {};
-        outputStarts[0] = reinterpret_cast<float*>(output);
-        if (copiableFrameCounts[1] != 0) {
-            playbackBufferStarts[1] = &playbackBuffer->samples[copiableFrameCounts[0] * channels];
-            outputStarts[1] = &reinterpret_cast<float*>(output)[copiableFrameCounts[0] * channels];
-        }
-
-        ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(0) %u/%u/0x%lx (frames/samples/bytes), from playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableFrameCounts[0], copiableFrameCounts[0] * channels, copiableFrameCounts[0] * channels * sizeof(float), playbackStart / channels, playbackStart, playbackStart * sizeof(float), playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
-
-        std::memcpy(outputStarts[0], playbackBufferStarts[0], copiableFrameCounts[0] * channels * sizeof(float));
-        playbackBuffer->playedUntil = playbackStart + copiableFrameCounts[0] * channels;
-
-        if (copiableFrameCounts[1] != 0) {
-            ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "-consuming(1) %u/%u/0x%lx (frames/samples/bytes), from playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableFrameCounts[1], copiableFrameCounts[1] * channels, copiableFrameCounts[1] * channels * sizeof(float), copiableFrameCounts[0], copiableFrameCounts[0] * channels, copiableFrameCounts[0] * channels * sizeof(float), playbackBuffer->samplesPlayedSinceLastProduction * channels, playbackBuffer->samplesPlayedSinceLastProduction, playbackBuffer->samplesPlayedSinceLastProduction * sizeof(float));
-
-            std::memcpy(outputStarts[1], playbackBufferStarts[1], copiableFrameCounts[1] * channels * sizeof(float));
-            playbackBuffer->playedUntil = copiableFrameCounts[1] * channels;
-        }
-
-        playbackBuffer->playedUntil %= playbackSampleCount;
-        playbackBuffer->nextPredictedPlay = playbackBuffer->playedUntil;
-        playbackBuffer->samplesPlayedSinceLastProduction += totalCopiableFrameCount * channels;
-        playbackBuffer->totalSamplesPlayed += totalCopiableFrameCount * channels;
+        size_t count = frameCount * device->playback.channels;
+        //ma_log_postf(device->pContext->pLog, MA_LOG_LEVEL_INFO, "%zu samples requested, %zu samples received\n", count, playbackBuffer->consume(count, reinterpret_cast<float*>(output), false));
     };
 
     maPlaybackDeviceConfig.pUserData = &playbackBuffer;
@@ -460,7 +517,7 @@ int main(int argc, char** argv) {
                         ma_encoder maEncoder = {};
                         assert(ma_encoder_init_file("out.wav", &maEncoderConfig, &maEncoder) == MA_SUCCESS);
 
-                        assert(ma_encoder_write_pcm_frames(&maEncoder, playbackBuffer.samples, playbackBuffer.sampleCount / maPlaybackDeviceConfig.playback.channels, nullptr) == MA_SUCCESS);
+                        assert(ma_encoder_write_pcm_frames(&maEncoder, playbackBuffer.data(), playbackBuffer.capacity() / maPlaybackDeviceConfig.playback.channels, nullptr) == MA_SUCCESS);
                         ma_encoder_uninit(&maEncoder);
                     }
                     break;
@@ -473,7 +530,7 @@ int main(int argc, char** argv) {
             if (mainSwapchainPresentationFinishedFence != nullptr && mainSwapchainPresentationFinishedFence->status()) {
                 mainSwapchainPresentationFinishedFence->release();
                 mainSwapchainPresentationFinishedFence = nullptr;
-                
+
                 presentInProgress = false;
             }
         }
@@ -505,50 +562,12 @@ int main(int argc, char** argv) {
 
             audioComputeBatchInProgress = false;
 
-            uint32_t newStart = playbackBuffer.end % playbackBuffer.sampleCount;
-            uint32_t producedSampleCount = cpuEndpointBufferInfo.size / sizeof(float);
-            uint32_t availableSampleCounts[2] = {};
-            availableSampleCounts[0] = playbackBuffer.sampleCount - newStart;
-            availableSampleCounts[1] = newStart;
-
-            uint32_t totalCopiableSampleCount = std::min(producedSampleCount, playbackBuffer.sampleCount);
-
-            uint32_t copiableSampleCounts[2] = {};
-            copiableSampleCounts[0] = std::min(producedSampleCount, availableSampleCounts[0]);
-            if (totalCopiableSampleCount > availableSampleCounts[0]) {
-                copiableSampleCounts[1] = totalCopiableSampleCount - availableSampleCounts[0];
-            }
-
-            uint32_t newEnd = playbackBuffer.end;
-            float* cpuEndpointMapped = reinterpret_cast<float*>(cpuEndpointBuffer->map());
-            if (copiableSampleCounts[0] != 0) {
-                assert(newStart + copiableSampleCounts[0] <= playbackBuffer.sampleCount);
-                assert(copiableSampleCounts[0] <= cpuEndpointBufferInfo.size / sizeof(float));
-
-                ma_log_postf(maContext.pLog, MA_LOG_LEVEL_INFO, "+producing(0) %u/%u/0x%lx (frames/samples/bytes), to playback buffer offset %u/%u/0x%lx (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableSampleCounts[0] / maPlaybackDevice.playback.channels, copiableSampleCounts[0], copiableSampleCounts[0] * sizeof(float), newStart / maPlaybackDevice.playback.channels, newStart, newStart * sizeof(float), playbackBuffer.samplesPlayedSinceLastProduction / maPlaybackDevice.playback.channels, playbackBuffer.samplesPlayedSinceLastProduction, playbackBuffer.samplesPlayedSinceLastProduction * sizeof(float));
-
-                std::memcpy(&playbackBuffer.samples[newStart], cpuEndpointMapped, copiableSampleCounts[0] * sizeof(float));
-                newEnd = newStart + copiableSampleCounts[0];
-            }
-
-            if (copiableSampleCounts[1] != 0) {
-                assert(copiableSampleCounts[1] < playbackBuffer.sampleCount);
-                assert(copiableSampleCounts[0] + copiableSampleCounts[1] <= cpuEndpointBufferInfo.size / sizeof(float));
-
-                ma_log_postf(maContext.pLog, MA_LOG_LEVEL_INFO, "+producing(1) %u/%u/0x%lx (frames/samples/bytes), to playback buffer offset 0/0/0x0 (frames/samples/bytes); played since last production %llu/%llu/0x%llx (frames/samples/bytes)\n", copiableSampleCounts[1] / maPlaybackDevice.playback.channels, copiableSampleCounts[1], copiableSampleCounts[1] * sizeof(float), playbackBuffer.samplesPlayedSinceLastProduction / maPlaybackDevice.playback.channels, playbackBuffer.samplesPlayedSinceLastProduction, playbackBuffer.samplesPlayedSinceLastProduction * sizeof(float));
-
-                std::memcpy(&playbackBuffer.samples[0], &cpuEndpointMapped[copiableSampleCounts[0]], copiableSampleCounts[1] * sizeof(float));
-                newEnd = copiableSampleCounts[1];
-            }
-
-            playbackBuffer.start = newStart;
-            playbackBuffer.end = newEnd;
-            playbackBuffer.samplesPlayedSinceLastProduction = 0;
-            playbackBuffer.totalSamplesProduced += producedSampleCount;
+            float* cpuEndpointBufferMapped = reinterpret_cast<float*>(cpuEndpointBuffer->map());
+            assert(playbackBuffer.produce(INTERNAL_AUDIO_BUFFER_FRAME_COUNT * maPlaybackDevice.playback.channels, cpuEndpointBufferMapped, true));
             cpuEndpointBuffer->unmap();
         }
 
-        if (!audioComputeBatchInProgress && (playbackBuffer.samplesPlayedSinceLastProduction >= playbackBuffer.sampleCount / 2 || playbackBuffer.totalSamplesPlayed >= playbackBuffer.totalSamplesProduced)) {
+        if (!audioComputeBatchInProgress) {
             vkom::IResourceView* cpuUniformBufferResourceView = cpuUniformBufferView->queryInterface<vkom::IResourceView>();
 
             vkom::DescriptorWrite moduleCommonUniformsDescriptorSetWrite = {};
@@ -628,6 +647,8 @@ int main(int argc, char** argv) {
             uniforms.dispatchWidth = (INTERNAL_AUDIO_BUFFER_FRAME_COUNT + 1023) / 1024;
             uniforms.sampleRate = maPlaybackDeviceConfig.sampleRate;
             uniforms.inverseSampleRate = 1.0f / static_cast<float>(uniforms.sampleRate);
+
+            globalID += INTERNAL_AUDIO_BUFFER_FRAME_COUNT;
 
             //std::printf("%u\n", globalID);
 
@@ -813,8 +834,6 @@ int main(int argc, char** argv) {
             presentInProgress = true;
             mainBackbuffer->release();
         }
-
-        globalID = playbackBuffer.totalSamplesProduced;//totalCopiableSampleCount / maPlaybackDevice.playback.channels;
 
         ModuleInfo newDefaultModule = {};
         vkom::IComputePipeline* newDefaultModulePipeline = loadModuleAndPipeline(newDefaultModule, gpuContext.device, modulePipelineLayout, "module.hlsl.spv", defaultModule.lastModified);
