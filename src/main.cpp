@@ -116,6 +116,70 @@ public:
     }
 };
 
+enum class PassResourceMode {
+    Consume = 1,
+    Produce = 2,
+};
+
+enum class PassResourceFormat {
+    Float = 1,
+    Int32 = 2,
+};
+
+enum class PassResourceAddressingType {
+    SSBO = 1,
+    DeviceAddress = 2,
+};
+
+struct PassResourceAddressingInfo {
+    PassResourceAddressingType type;
+    uint32_t bindingOrSlot;
+    uint32_t set;
+    char name[128];
+};
+
+struct PassResourceBounds {
+    float lower;
+    float upper;
+};
+
+struct PassSlotResourceInfo {
+    uint32_t count;
+    PassResourceAddressingInfo addressing;
+    PassResourceMode mode;
+    PassResourceFormat format;
+    PassResourceBounds defaultBounds;
+};
+
+struct PassSlotTileInfo {
+    uint32_t width;
+    uint32_t height;
+    uint32_t binding;
+    uint32_t set;
+    char name[128];
+};
+
+class IPass {
+public:
+    virtual bool enumerateResourceSlots(uint32_t id, PassSlotResourceInfo* info) = 0;
+    virtual bool enumerateTileSlots(uint32_t id, PassSlotTileInfo* info) = 0;
+
+    virtual bool prepare() = 0;
+
+    virtual bool bindResourceSSBO(uint32_t binding, uint32_t set, vkom::IBufferView* view, PassResourceBounds const* bounds) = 0;
+    virtual bool bindResourceDeviceAddress(uint32_t slot, vkom::IDeviceAddressBuffer* buffer, PassResourceBounds const* bounds) = 0;
+    virtual bool bindResource(const char* name, vkom::IBufferView* ssboView, vkom::IDeviceAddressBuffer* dabo, PassResourceBounds const* bounds) = 0;
+
+    virtual bool bindConstantSSBO(uint32_t binding, uint32_t set, float f, int32_t i) = 0;
+    virtual bool bindConstantDeviceAddress(uint32_t slot, float f, int32_t i) = 0;
+    virtual bool bindConstant(const char* name, float f, int32_t i) = 0;
+
+    virtual bool bindTile(const char* name, vkom::ITextureView* view) = 0;
+    virtual bool bindTileBindingSet(uint32_t binding, uint32_t set, vkom::ITextureView* view) = 0;
+
+    virtual bool execute(vkom::ICommandEncoder* encoder) = 0;
+};
+
 #define INTERNAL_PLAYBACK_BUFFER_SAMPLE_COUNT 44100 * 10
 #define INTERNAL_AUDIO_BUFFER_FRAME_COUNT 16384
 
@@ -222,6 +286,453 @@ vkom::IComputePipeline* loadModuleAndPipeline(ModuleInfo& moduleInfo, vkom::IDev
 
     return modulePipeline;
 }
+
+struct GeneralPassPipelineData {
+    vkom::IPipelineLayout* layout;
+    vkom::IComputePipeline* pipeline;
+};
+
+struct GeneralPassDescriptorSetLayoutData {
+    uint32_t set;
+    vkom::IDescriptorSetLayout* layout;
+};
+
+struct GeneralPassDispatchDescriptorSetData {
+    uint32_t setID;
+    vkom::IDescriptorSet* set;
+};
+
+struct GeneralPassDispatchData {
+    vkom::IFence* fence;
+    std::vector<GeneralPassDispatchDescriptorSetData> sets;
+};
+
+struct GeneralPassResourceBindingData {
+    vkom::IBufferView* ssboView = nullptr;
+    vkom::IDeviceAddressBuffer* dabo = nullptr;
+    PassResourceBounds bounds;
+    float f = 0.0f;
+    int32_t i = 0;
+};
+
+template<size_t DispatchesInFlight, bool blocking = true>
+class GeneralPass : public IPass {
+private:
+    klatr::gpu::Context const& _context;
+    GeneralPassPipelineData _pipelineData;
+    std::vector<PassSlotResourceInfo> _resourceInfos = {};
+    std::vector<PassSlotTileInfo> _tileInfos = {};
+
+    bool _isDescriptorless = false;
+    uint32_t _dispatchID = 0;
+    std::array<GeneralPassDispatchData, DispatchesInFlight> _dispatchDatas = {};
+
+    std::vector<GeneralPassResourceBindingData> _resourceBindings = {};
+    std::vector<vkom::ITextureView*> _tileBindings = {};
+
+public:
+    GeneralPass(klatr::gpu::Context const& context, GeneralPassPipelineData const& pipelineData, std::vector<PassSlotResourceInfo> const& resourceInfos, std::vector<PassSlotTileInfo> const& tileInfos) : _context(context), _pipelineData(pipelineData), _resourceInfos(resourceInfos), _tileInfos(tileInfos), _resourceBindings(_resourceInfos.size(), nullptr), _tileBindings(_tileInfos.size(), nullptr) {
+        _pipelineData.layout->retain();
+        _pipelineData.pipeline->retain();
+
+        _isDescriptorless = _tileInfos.empty();
+
+        for (PassSlotResourceInfo const& info : _resourceInfos) {
+            if (info.addressing.type == PassResourceAddressingType::SSBO) {
+                _isDescriptorless = false;
+                break;
+            }
+        }
+    }
+
+    ~GeneralPass() {
+        for (GeneralPassDispatchData const& dispatch : _dispatchDatas) {
+            if (dispatch.fence != nullptr) {
+                dispatch.fence->release();
+            }
+
+            for (GeneralPassDispatchDescriptorSetData const& set : dispatch.sets) {
+                if (set.set != nullptr) {
+                    set.set->release();
+                }
+            }
+        }
+
+        for (GeneralPassResourceBindingData const& binding : _resourceBindings) {
+            if (binding.ssboView != nullptr) {
+                binding.ssboView->release();
+            }
+
+            if (binding.dabo != nullptr) {
+                binding.dabo->release();
+            }
+        }
+
+        for (vkom::ITextureView* tile : _tileBindings) {
+            if (tile != nullptr) {
+                tile->release();
+            }
+        }
+
+        _pipelineData.layout->release();
+        _pipelineData.pipeline->release();
+    }
+
+    bool enumerateResourceSlots(uint32_t id, PassSlotResourceInfo* info) override {
+        if (id >= _resourceInfos.size()) {
+            return false;
+        }
+
+        *info = _resourceInfos[id];
+        return true;
+    }
+
+    bool enumerateTileSlots(uint32_t id, PassSlotTileInfo* info) override {
+        if (id >= _tileInfos.size()) {
+            return false;
+        }
+
+        *info = _tileInfos[id];
+        return true;
+    }
+
+    bool prepare() override {
+        return true;
+    }
+
+    bool bindResourceSSBO(uint32_t binding, uint32_t set, vkom::IBufferView* view, PassResourceBounds const* bounds) override {
+        vkom::IBuffer* buffer = view->parent<vkom::IBuffer>();
+        if (buffer == nullptr) {
+            return false;
+        }
+
+        vkom::IStorageBuffer* ssbo = buffer->queryInterface<vkom::IStorageBuffer>();
+        if (ssbo == nullptr) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (_resourceInfos[i].addressing.type != PassResourceAddressingType::SSBO) {
+                continue;
+            }
+
+            if (_resourceInfos[i].addressing.bindingOrSlot != binding || _resourceInfos[i].addressing.set != set) {
+                continue;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+
+            _resourceBindings[i].dabo = nullptr;
+            _resourceBindings[i].ssboView = view;
+            view->retain();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindResourceDeviceAddress(uint32_t slot, vkom::IDeviceAddressBuffer* buffer, PassResourceBounds const* bounds) override {
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (_resourceInfos[i].addressing.type != PassResourceAddressingType::DeviceAddress) {
+                continue;
+            }
+
+            if (_resourceInfos[i].addressing.bindingOrSlot != slot) {
+                continue;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+
+            _resourceBindings[i].ssboView = nullptr;
+            _resourceBindings[i].dabo = buffer;
+            buffer->retain();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindResource(const char* name, vkom::IBufferView* ssboView, vkom::IDeviceAddressBuffer* dabo, PassResourceBounds const* bounds) override {
+        if (ssboView != nullptr) {
+            vkom::IBuffer* buffer = ssboView->parent<vkom::IBuffer>();
+            if (buffer == nullptr) {
+                return false;
+            }
+
+            vkom::IStorageBuffer* ssbo = buffer->queryInterface<vkom::IStorageBuffer>();
+            if (ssbo == nullptr) {
+                return false;
+            }
+        }
+
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (std::strcmp(_resourceInfos[i].addressing.name, name) != 0) {
+                continue;
+            }
+
+            if (_resourceInfos[i].addressing.type == PassResourceAddressingType::SSBO && ssboView == nullptr) {
+                return false;
+            }
+
+            if (_resourceInfos[i].addressing.type == PassResourceAddressingType::DeviceAddress && dabo == nullptr) {
+                return false;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+            
+            if (_resourceInfos[i].addressing.type == PassResourceAddressingType::SSBO) {
+                _resourceBindings[i].dabo = nullptr;
+                _resourceBindings[i].ssboView = ssboView;
+                ssboView->retain();
+            } else if (_resourceInfos[i].addressing.type == PassResourceAddressingType::DeviceAddress) {
+                _resourceBindings[i].ssboView = nullptr;
+                _resourceBindings[i].dabo = dabo;
+                dabo->retain();
+            }
+
+            if (bounds != nullptr) {
+                _resourceBindings[i].bounds = *bounds;
+            } else {
+                _resourceBindings[i].bounds = _resourceInfos[i].defaultBounds;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindConstantSSBO(uint32_t binding, uint32_t set, float f, int32_t i) override {
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (_resourceInfos[i].addressing.type != PassResourceAddressingType::SSBO) {
+                continue;
+            }
+
+            if (_resourceInfos[i].addressing.bindingOrSlot != binding || _resourceInfos[i].addressing.set != set) {
+                continue;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+
+            _resourceBindings[i] = {};
+            _resourceBindings[i].f = f;
+            _resourceBindings[i].i = i;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindConstantDeviceAddress(uint32_t slot, float f, int32_t i) override {
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (_resourceInfos[i].addressing.type != PassResourceAddressingType::DeviceAddress) {
+                continue;
+            }
+
+            if (_resourceInfos[i].addressing.bindingOrSlot != slot) {
+                continue;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+
+            _resourceBindings[i] = {};
+            _resourceBindings[i].f = f;
+            _resourceBindings[i].i = i;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindConstant(const char* name, float f, int32_t i) override {
+        for (uint32_t i = 0; i < _resourceInfos.size(); i += 1) {
+            if (std::strcmp(_resourceInfos[i].addressing.name, name) != 0) {
+                continue;
+            }
+
+            if (_resourceBindings[i].ssboView != nullptr) {
+                _resourceBindings[i].ssboView->release();
+            }
+
+            if (_resourceBindings[i].dabo != nullptr) {
+                _resourceBindings[i].dabo->release();
+            }
+
+            _resourceBindings[i] = {};
+            _resourceBindings[i].f = f;
+            _resourceBindings[i].i = i;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindTile(const char* name, vkom::ITextureView* view) override {
+        vkom::ITexture* texture = view->parent<vkom::ITexture>();
+        if (texture == nullptr) {
+            return false;
+        }
+
+        vkom::IStorageTexture* storageTexture = texture->queryInterface<vkom::IStorageTexture>();
+        if (storageTexture == nullptr) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < _tileInfos.size(); i += 1) {
+            if (std::strcmp(_tileInfos[i].name, name) != 0) {
+                continue;
+            }
+
+            if (_tileBindings[i] != nullptr) {
+                _tileBindings[i]->release();
+            }
+
+            _tileBindings[i] = view;
+            view->retain();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool bindTileBindingSet(uint32_t binding, uint32_t set, vkom::ITextureView* view) override {
+        vkom::ITexture* texture = view->parent<vkom::ITexture>();
+        if (texture == nullptr) {
+            return false;
+        }
+
+        vkom::IStorageTexture* storageTexture = texture->queryInterface<vkom::IStorageTexture>();
+        if (storageTexture == nullptr) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < _tileInfos.size(); i += 1) {
+            if (_tileInfos[i].binding != binding || _tileInfos[i].set != set) {
+                continue;
+            }
+
+            if (_tileBindings[i] != nullptr) {
+                _tileBindings[i]->release();
+            }
+
+            _tileBindings[i] = view;
+            view->retain();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool execute(vkom::ICommandEncoder* encoder, vkom::IFence* executionFinishedFence) override {
+        GeneralPassDispatchData& currentDispatch = _dispatchDatas[_dispatchID % DispatchesInFlight];
+        if (!_isDescriptorless) {
+            if (currentDispatch.fence != nullptr && !currentDispatch.fence->status()) {
+                if (!blocking) {
+                    return false;
+                }
+
+                assert(currentDispatch.fence->wait() == vkom::Result::Success);
+                currentDispatch.fence->release();
+            }
+
+            currentDispatch.fence = executionFinishedFence;
+            currentDispatch.fence->retain();
+        }
+
+        vkom::ComputePassDescriptor passDescriptor = {};
+        vkom::IComputePass* pass = encoder->beginComputePass(&passDescriptor);
+
+        pass->bindPipeline(_pipelineData.pipeline);
+        for (GeneralPassDispatchDescriptorSetData const& set : currentDispatch.sets) {
+            pass->bindDescriptorSet(_pipelineData.layout, set.setID, set.set, 0, nullptr);
+        }
+
+        size_t pushConstantDescriptorCount = 0;
+        for (PassSlotResourceInfo const& info : _resourceInfos) {
+            if (info.addressing.type != PassResourceAddressingType::DeviceAddress) {
+                continue;
+            }
+
+            pushConstantDescriptorCount = std::max(pushConstantDescriptorCount, info.addressing.bindingOrSlot);
+        }
+
+        std::vector<PushConstantAudioBufferDescriptor> pushConstants(pushConstantDescriptorCount, {});
+        for (size_t i = 0; i < _resourceInfos.size(); i += 1) {
+            PassSlotResourceInfo const& info = _resourceInfos[i];
+            GeneralPassResourceBindingData const& binding = _resourceBindings[i];
+
+            if (info.addressing.type != PassResourceAddressingType::DeviceAddress) {
+                continue;
+            }
+
+            if (binding.dabo != nullptr) {
+                vkom::BufferInfo daboInfo = {};
+                binding.dabo->getInfo(&daboInfo);
+
+                pushConstants[info.addressing.bindingOrSlot].address = binding.dabo->deviceAddress();
+                pushConstants[info.addressing.bindingOrSlot].count = daboInfo.size / sizeof(float);
+            }
+        }
+
+        pass->pushConstants(_pipelineData.layout, vkom::ShaderStageFlags::Compute, 0, pushConstants.size() * sizeof(PushConstantAudioBufferDescriptor), pushConstants.data());
+
+        pass->end();
+
+        for (GeneralPassResourceBindingData const& binding : _resourceBindings) {
+            if (binding.buffer != nullptr) {
+                binding.buffer->release();
+            }
+        }
+
+        for (vkom::ITextureView* tile : _tileBindings) {
+            if (tile != nullptr) {
+                tile->release();
+            }
+        }
+
+        _resourceBindings.assign(_resourceBindings.size(), {});
+        _tileBindings.assign(_tileBindings.size(), nullptr);
+
+        _dispatchID += 1;
+    }
+};
 
 vkom::SurfaceWSIInfo surfaceWSIInfoFromSDLWindow(SDL_Window* window) {
     vkom::SurfaceWSIInfo info = {};
