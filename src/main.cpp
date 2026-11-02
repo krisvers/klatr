@@ -7,7 +7,7 @@
 #include <SDL3/SDL.h>
 
 #include <glslang/Public/ShaderLang.h>
-#include <glslang/SPIRV/GlslangToSpv.h>
+#include <SPIRV/GlslangToSpv.h>
 
 #include "renderdoc_app.h"
 
@@ -1266,267 +1266,7 @@ vkom::IComputePipeline* loadPipelineFromFile(ModuleInfo& moduleInfo, vkom::IDevi
 //    return info;
 //}
 
-int main(int argc, char** argv) {
-    vkom::IDynlib* renderdocDynlib = vkom::loadDynlib("renderdoc.dll");
-    if (renderdocDynlib == nullptr) {
-        renderdocDynlib = vkom::loadDynlib("librenderdoc.so");
-    }
-
-    RENDERDOC_API_1_7_0* renderdoc = nullptr;
-    if (renderdocDynlib != nullptr) {
-        pRENDERDOC_GetAPI getAPI = renderdocDynlib->loadSymbol<pRENDERDOC_GetAPI>("RENDERDOC_GetAPI");
-        assert(getAPI != nullptr);
-
-        assert(getAPI(eRENDERDOC_API_Version_1_7_0, reinterpret_cast<void**>(&renderdoc)) == 1);
-    }
-
-    klatr::gpu::Context gpuContext = klatr::gpu::Context(true);
-    gpuContext.instance->setLogCallback([](vkom::IInstance* instance, void* userData, vkom::DebugMessageSeverityFlags severity, vkom::DebugMessageTypeFlags types, const char* message) {
-        std::printf("[vkom]: %s\n", message);
-    }, nullptr);
-
-    assert(glslang::InitializeProcess());
-    assert(ShInitialize());
-
-    assert(SDL_Init(SDL_INIT_VIDEO));
-
-    SDL_Window* mainWindow = SDL_CreateWindow("klatr | main", 1200, 800, 0);
-    assert(mainWindow != nullptr);
-
-    //vkom::IWSIInstance* wsiInstance = gpuContext.instance->queryInterface<vkom::IWSIInstance>();
-    //assert(wsiInstance != nullptr);
-
-    //vkom::IWSIDevice* wsiDevice = gpuContext.device->queryInterface<vkom::IWSIDevice>();
-    //assert(wsiDevice != nullptr);
-
-    /* TODO: other platforms */
-    //vkom::SurfaceWSIInfo mainSurfaceInfo = surfaceWSIInfoFromSDLWindow(mainWindow);
-
-    //vkom::ISurface* mainSurface;
-    //assert(wsiInstance->createSurface(&mainSurfaceInfo, &mainSurface) == vkom::Result::Success);
-
-    //vkom::SurfaceCapabilities mainSurfaceCapabilities = {};
-    //gpuContext.adapter->querySurfaceCapabilities(mainSurface, &mainSurfaceCapabilities);
-
-    //vkom::SwapchainInfo mainSwapchainInfo = {};
-    //mainSwapchainInfo.backbufferCount = std::min(std::max(3u, mainSurfaceCapabilities.minBackbufferCount), mainSurfaceCapabilities.maxBackbufferCount);
-    //mainSwapchainInfo.backbufferInfo.samplesPerTexel = 1;
-    //mainSwapchainInfo.backbufferInfo.usage = vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource;
-    //mainSwapchainInfo.backbufferInfo.dimensions.extent = mainSurfaceCapabilities.currentExtent;
-    //mainSwapchainInfo.backbufferInfo.dimensions.subresource.layers = 1;
-    //mainSwapchainInfo.backbufferInfo.dimensions.subresource.mips = 1;
-    //mainSwapchainInfo.backbufferInfo.location = vkom::MemoryLocationFlags::GPU;
-    //mainSwapchainInfo.preTransform = vkom::SurfaceTransformFlags::Identity;
-    //mainSwapchainInfo.compositeAlpha = vkom::CompositeAlphaFlags::Opaque;
-    //mainSwapchainInfo.surfaceFormatBits = gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNorm, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNorm, vkom::ColorSpaceFlags::All);
-    //mainSwapchainInfo.presentModeFlags = gpuContext.adapter->querySurfacePresentModes(mainSurface);
-    
-    //vkom::ISwapchain* mainSwapchain;
-    //assert(wsiDevice->createSwapchain(mainSurface, &mainSwapchainInfo, &mainSwapchain) == vkom::Result::Success);
-
-    vkom::IHeap* cpuEndpointBufferHeap;
-    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuEndpointBufferHeap) == vkom::Result::Success);
-
-    vkom::IHeap* gpuTransientBufferHeap;
-    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::GPU, &gpuTransientBufferHeap) == vkom::Result::Success);
-
-    vkom::IHeap* cpuUniformBufferHeap;
-    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::UniformBuffer, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuUniformBufferHeap) == vkom::Result::Success);
-
-    //vkom::IHeap* gpuModuleTileTextureHeap;
-    //assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::None, vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource | vkom::TextureUsageFlags::Storage, vkom::MemoryLocationFlags::GPU, &gpuModuleTileTextureHeap) == vkom::Result::Success);
-
-    //vkom::DescriptorBindingInfo moduleCommonUniformsDescriptorSetLayoutBindingInfos[1] = {};
-    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].binding = 0;
-    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
-    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].count = 1;
-    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
-
-    //vkom::DescriptorSetLayoutInfo moduleCommonUniformsDescriptorSetLayoutInfo = {};
-    //moduleCommonUniformsDescriptorSetLayoutInfo.bindingCount = 1;
-    //moduleCommonUniformsDescriptorSetLayoutInfo.bindings = &moduleCommonUniformsDescriptorSetLayoutBindingInfos[0];
-
-    //vkom::IDescriptorSetLayout* moduleCommonUniformsDescriptorSetLayout;
-    //assert(gpuContext.device->createDescriptorSetLayout(&moduleCommonUniformsDescriptorSetLayoutInfo, &moduleCommonUniformsDescriptorSetLayout) == vkom::Result::Success);
-
-    //vkom::DescriptorBindingInfo moduleTileDescriptorSetLayoutBindingInfos[1] = {};
-    //moduleTileDescriptorSetLayoutBindingInfos[0].binding = 0;
-    //moduleTileDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::StorageTexture;
-    //moduleTileDescriptorSetLayoutBindingInfos[0].count = 1;
-    //moduleTileDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
-
-    //vkom::DescriptorSetLayoutInfo moduleTileDescriptorSetLayoutInfo = {};
-    //moduleTileDescriptorSetLayoutInfo.bindingCount = 1;
-    //moduleTileDescriptorSetLayoutInfo.bindings = &moduleTileDescriptorSetLayoutBindingInfos[0];
-
-    //vkom::IDescriptorSetLayout* moduleTileDescriptorSetLayout;
-    //assert(gpuContext.device->createDescriptorSetLayout(&moduleTileDescriptorSetLayoutInfo, &moduleTileDescriptorSetLayout) == vkom::Result::Success);
-
-    /* TODO: more accurate count of descriptor types */
-    /*
-    vkom::DescriptorPoolDescriptorInfo moduleDescriptorPoolDescriptorInfos[2] = {};
-    moduleDescriptorPoolDescriptorInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
-    moduleDescriptorPoolDescriptorInfos[0].count = 256;
-    moduleDescriptorPoolDescriptorInfos[1].flags = vkom::DescriptorFlags::StorageTexture;
-    moduleDescriptorPoolDescriptorInfos[1].count = 256;
-    */
-
-    /* TODO: more accurate count of descriptor sets */
-    /*
-    vkom::DescriptorPoolInfo moduleDescriptorPoolInfo = {};
-    moduleDescriptorPoolInfo.maxDescriptorSets = 256;
-    moduleDescriptorPoolInfo.descriptorCount = 2;
-    moduleDescriptorPoolInfo.descriptors = &moduleDescriptorPoolDescriptorInfos[0];
-
-    vkom::IDescriptorPool* moduleDescriptorPool;
-    assert(gpuContext.device->createDescriptorPool(&moduleDescriptorPoolInfo, &moduleDescriptorPool) == vkom::Result::Success);
-
-    vkom::IDescriptorSet* moduleCommonUniformsDescriptorSet;
-    assert(moduleDescriptorPool->allocateDescriptorSets(moduleCommonUniformsDescriptorSetLayout, 1, &moduleCommonUniformsDescriptorSet) == vkom::Result::Success);
-
-    vkom::IDescriptorSet* moduleTileDescriptorSet;
-    assert(moduleDescriptorPool->allocateDescriptorSets(moduleTileDescriptorSetLayout, 1, &moduleTileDescriptorSet) == vkom::Result::Success);
-    */
-
-    vkom::AdapterLimits adapterLimits;
-    gpuContext.adapter->queryLimits(&adapterLimits);
-
-    vkom::PushConstantRange globalPipelineLayoutPushConstantRange = {};
-    globalPipelineLayoutPushConstantRange.offset = 0;
-    globalPipelineLayoutPushConstantRange.size = adapterLimits.maxPushConstantsSize;
-    globalPipelineLayoutPushConstantRange.stages = vkom::ShaderStageFlags::Compute;
-
-    vkom::PipelineLayoutInfo globalPipelineLayoutInfo = {};
-    globalPipelineLayoutInfo.pushConstantRangeCount = 1;
-    globalPipelineLayoutInfo.pushConstantRanges = &globalPipelineLayoutPushConstantRange;
-
-    vkom::IPipelineLayout* globalPipelineLayout;
-    assert(gpuContext.device->createPipelineLayout(&globalPipelineLayoutInfo, &globalPipelineLayout) == vkom::Result::Success);
-
-    const char* hlslTestModuleSource =
-R"(
-#define AUDIO_BUFFER_CONFIG_FLAG_VALUE_WRAPAROUND 0x0001
-#define AUDIO_BUFFER_CONFIG_FLAG_INDEX_WRAPAROUND 0x0002
-#define AUDIO_BUFFER_CONFIG_FLAG_VALUE_REINTERPRET 0x0004
-#define AUDIO_BUFFER_CONFIG_FLAG_FORMAT_INT 0x0008
-#define AUDIO_BUFFER_CONFIG_FLAG_INDEX_REVERSED 0x0010
-#define AUDIO_BUFFER_CONFIG_FLAG_VALUE_NOT_NORMALIZED_TO_BOUNDS 0x0020
-
-#define AUDIO_BUFFER_CONFIG_FLAG_ACCESS_READ 0x4000
-#define AUDIO_BUFFER_CONFIG_FLAG_ACCESS_WRITE 0x8000
-
-struct AudioBufferDescriptor {
-    uint64_t address;
-    uint count;
-
-    uint config;
-
-    float lowerBound;
-    float upperBound;
-};
-
-struct PushConstants {
-    uint dispatchWidth;
-    uint sampleRate;
-    AudioBufferDescriptor buffers[5];
-};
-
-[[vk::push_constant]]
-PushConstants pushConstants;
-
-float rangeMap(float t, float inLower, float inUpper, float outLower, float outUpper) {
-    float inRange = inUpper - inLower;
-    float outRange = outUpper - outLower;
-
-    float normalized = (t - inLower) / inRange;
-    return normalized * outRange + outLower;
-}
-
-bool read(AudioBufferDescriptor descriptor, uint64_t index, out float value) {
-    value = 0;
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_ACCESS_READ) == 0) {
-        return false;
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_INDEX_WRAPAROUND) != 0) {
-        index %= descriptor.count;
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_INDEX_REVERSED) != 0) {
-        index = descriptor.count - index;
-    }
-
-    if (descriptor.lowerBound == descriptor.upperBound) {
-        value = descriptor.lowerBound;
-        return (index < descriptor.count);
-    }
-
-    if (index >= descriptor.count || descriptor.address == 0) {
-        return false;
-    }
-
-    float raw;
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_FORMAT_INT) != 0 && (descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_VALUE_REINTERPRET) == 0) {
-        raw = float(vk::RawBufferLoad<int>(descriptor.address + index * sizeof(int)));
-    } else {
-        raw = vk::RawBufferLoad<float>(descriptor.address + index * sizeof(float));
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_VALUE_NOT_NORMALIZED_TO_BOUNDS) != 0) {
-        value = rangeMap(raw, -1.0, 1.0, descriptor.lowerBound, descriptor.upperBound);
-    } else {
-        value = raw;
-    }
-
-    return true;
-}
-
-bool write(AudioBufferDescriptor descriptor, uint64_t index, float value) {
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_ACCESS_WRITE) == 0) {
-        return false;
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_INDEX_WRAPAROUND) != 0) {
-        index %= descriptor.count;
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_INDEX_REVERSED) != 0) {
-        index = descriptor.count - index;
-    }
-
-    if (index >= descriptor.count || descriptor.address == 0) {
-        return false;
-    }
-
-    float normalized;
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_VALUE_NOT_NORMALIZED_TO_BOUNDS) != 0) {
-        normalized = value;
-    } else {
-        normalized = rangeMap(value, descriptor.lowerBound, descriptor.upperBound, -1.0, 1.0);
-    }
-
-    if ((descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_FORMAT_INT) != 0 && (descriptor.config & AUDIO_BUFFER_CONFIG_FLAG_VALUE_REINTERPRET) == 0) {
-        vk::RawBufferStore<int>(descriptor.address + index * sizeof(int), int(normalized));
-    } else {
-        vk::RawBufferStore<float>(descriptor.address + index * sizeof(float), normalized);
-    }
-
-    return true;
-}
-
-[numthreads(32, 32, 1)]
-void module(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID, uint3 threadCoordinateID : SV_DispatchThreadID) {
-    const uint3 groupDimensions = uint3(32, 32, 1);
-    const uint3 dispatchDimensions = uint3(pushConstants.dispatchWidth, 1, 1);
-
-    uint localID = groupThreadID.x + groupDimensions.x * (groupThreadID.y + groupDimensions.y * (groupThreadID.z + groupDimensions.z * (groupID.x + dispatchDimensions.x * (groupID.y + dispatchDimensions.y * groupID.z))));
-    uint64_t id = localID;
-
-    write(pushConstants.buffers[0], id, float(id % 32) / 16.0 - 1.0);
-}
-)";
-
-    std::string klatrKlatrSource = R"(
+const std::string klatrKlatrSource = R"(
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_buffer_reference : require
 
@@ -1690,36 +1430,285 @@ bool klatrWriteBufferFloat(KlatrAudioBufferDescriptor descriptor, uint64_t index
 
 layout (local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-bool module(uint id);
+bool module(uint id, uint N);
 
 void main() {
+    uint N = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z * gl_NumWorkGroups.x * gl_NumWorkGroups.y;
     uint id = gl_LocalInvocationID.x + gl_WorkGroupSize.x * (gl_LocalInvocationID.y + gl_WorkGroupSize.y * (gl_LocalInvocationID.z + gl_WorkGroupSize.z * (gl_WorkGroupID.x + gl_NumWorkGroups.x * (gl_WorkGroupID.y + gl_NumWorkGroups.y * gl_WorkGroupID.z))));
     
-    if (!module(id)) {
+    if (!module(id, N)) {
         
     }
 }
 )";
 
-    const char* testModuleSource = R"(
-#include <klatr/klatr.hlsl>
+int main(int argc, char** argv) {
+    vkom::IDynlib* renderdocDynlib = vkom::loadDynlib("renderdoc.dll");
+    if (renderdocDynlib == nullptr) {
+        renderdocDynlib = vkom::loadDynlib("librenderdoc.so");
+    }
 
-bool module(uint id) {
-    float value;
-    klatrReadBufferFloat(klatrPushConstants().buffers[1], id + klatrPushConstants().dispatchSampleIndex, value, 0.0);
-    klatrWriteBufferFloat(klatrPushConstants().buffers[0], id, value);
+    RENDERDOC_API_1_7_0* renderdoc = nullptr;
+    if (renderdocDynlib != nullptr) {
+        pRENDERDOC_GetAPI getAPI = renderdocDynlib->loadSymbol<pRENDERDOC_GetAPI>("RENDERDOC_GetAPI");
+        assert(getAPI != nullptr);
+
+        assert(getAPI(eRENDERDOC_API_Version_1_7_0, reinterpret_cast<void**>(&renderdoc)) == 1);
+    }
+
+    klatr::gpu::Context gpuContext = klatr::gpu::Context(true);
+    gpuContext.instance->setLogCallback([](vkom::IInstance* instance, void* userData, vkom::DebugMessageSeverityFlags severity, vkom::DebugMessageTypeFlags types, const char* message) {
+        std::printf("[vkom]: %s\n", message);
+    }, nullptr);
+
+    assert(glslang::InitializeProcess());
+    assert(ShInitialize());
+
+    assert(SDL_Init(SDL_INIT_VIDEO));
+
+    SDL_Window* mainWindow = SDL_CreateWindow("klatr | main", 1200, 800, 0);
+    assert(mainWindow != nullptr);
+
+    //vkom::IWSIInstance* wsiInstance = gpuContext.instance->queryInterface<vkom::IWSIInstance>();
+    //assert(wsiInstance != nullptr);
+
+    //vkom::IWSIDevice* wsiDevice = gpuContext.device->queryInterface<vkom::IWSIDevice>();
+    //assert(wsiDevice != nullptr);
+
+    /* TODO: other platforms */
+    //vkom::SurfaceWSIInfo mainSurfaceInfo = surfaceWSIInfoFromSDLWindow(mainWindow);
+
+    //vkom::ISurface* mainSurface;
+    //assert(wsiInstance->createSurface(&mainSurfaceInfo, &mainSurface) == vkom::Result::Success);
+
+    //vkom::SurfaceCapabilities mainSurfaceCapabilities = {};
+    //gpuContext.adapter->querySurfaceCapabilities(mainSurface, &mainSurfaceCapabilities);
+
+    //vkom::SwapchainInfo mainSwapchainInfo = {};
+    //mainSwapchainInfo.backbufferCount = std::min(std::max(3u, mainSurfaceCapabilities.minBackbufferCount), mainSurfaceCapabilities.maxBackbufferCount);
+    //mainSwapchainInfo.backbufferInfo.samplesPerTexel = 1;
+    //mainSwapchainInfo.backbufferInfo.usage = vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource;
+    //mainSwapchainInfo.backbufferInfo.dimensions.extent = mainSurfaceCapabilities.currentExtent;
+    //mainSwapchainInfo.backbufferInfo.dimensions.subresource.layers = 1;
+    //mainSwapchainInfo.backbufferInfo.dimensions.subresource.mips = 1;
+    //mainSwapchainInfo.backbufferInfo.location = vkom::MemoryLocationFlags::GPU;
+    //mainSwapchainInfo.preTransform = vkom::SurfaceTransformFlags::Identity;
+    //mainSwapchainInfo.compositeAlpha = vkom::CompositeAlphaFlags::Opaque;
+    //mainSwapchainInfo.surfaceFormatBits = gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::RGBA8UnsignedNorm, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNormSRGB, vkom::ColorSpaceFlags::All) | gpuContext.adapter->querySurfaceFormatBits(mainSurface, vkom::Format::BGRA8UnsignedNorm, vkom::ColorSpaceFlags::All);
+    //mainSwapchainInfo.presentModeFlags = gpuContext.adapter->querySurfacePresentModes(mainSurface);
+    
+    //vkom::ISwapchain* mainSwapchain;
+    //assert(wsiDevice->createSwapchain(mainSurface, &mainSwapchainInfo, &mainSwapchain) == vkom::Result::Success);
+
+    vkom::IHeap* cpuEndpointBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuEndpointBufferHeap) == vkom::Result::Success);
+
+    vkom::IHeap* gpuTransientBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::StorageBuffer | vkom::BufferUsageFlags::ShaderDeviceAddress, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::GPU, &gpuTransientBufferHeap) == vkom::Result::Success);
+
+    vkom::IHeap* cpuUniformBufferHeap;
+    assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::UniformBuffer, vkom::TextureUsageFlags::None, vkom::MemoryLocationFlags::CPU, &cpuUniformBufferHeap) == vkom::Result::Success);
+
+    //vkom::IHeap* gpuModuleTileTextureHeap;
+    //assert(gpuContext.device->createHeap(vkom::BufferUsageFlags::None, vkom::TextureUsageFlags::TransferDestination | vkom::TextureUsageFlags::TransferSource | vkom::TextureUsageFlags::Storage, vkom::MemoryLocationFlags::GPU, &gpuModuleTileTextureHeap) == vkom::Result::Success);
+
+    //vkom::DescriptorBindingInfo moduleCommonUniformsDescriptorSetLayoutBindingInfos[1] = {};
+    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].binding = 0;
+    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
+    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].count = 1;
+    //moduleCommonUniformsDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
+
+    //vkom::DescriptorSetLayoutInfo moduleCommonUniformsDescriptorSetLayoutInfo = {};
+    //moduleCommonUniformsDescriptorSetLayoutInfo.bindingCount = 1;
+    //moduleCommonUniformsDescriptorSetLayoutInfo.bindings = &moduleCommonUniformsDescriptorSetLayoutBindingInfos[0];
+
+    //vkom::IDescriptorSetLayout* moduleCommonUniformsDescriptorSetLayout;
+    //assert(gpuContext.device->createDescriptorSetLayout(&moduleCommonUniformsDescriptorSetLayoutInfo, &moduleCommonUniformsDescriptorSetLayout) == vkom::Result::Success);
+
+    //vkom::DescriptorBindingInfo moduleTileDescriptorSetLayoutBindingInfos[1] = {};
+    //moduleTileDescriptorSetLayoutBindingInfos[0].binding = 0;
+    //moduleTileDescriptorSetLayoutBindingInfos[0].flags = vkom::DescriptorFlags::StorageTexture;
+    //moduleTileDescriptorSetLayoutBindingInfos[0].count = 1;
+    //moduleTileDescriptorSetLayoutBindingInfos[0].stages = vkom::ShaderStageFlags::Compute;
+
+    //vkom::DescriptorSetLayoutInfo moduleTileDescriptorSetLayoutInfo = {};
+    //moduleTileDescriptorSetLayoutInfo.bindingCount = 1;
+    //moduleTileDescriptorSetLayoutInfo.bindings = &moduleTileDescriptorSetLayoutBindingInfos[0];
+
+    //vkom::IDescriptorSetLayout* moduleTileDescriptorSetLayout;
+    //assert(gpuContext.device->createDescriptorSetLayout(&moduleTileDescriptorSetLayoutInfo, &moduleTileDescriptorSetLayout) == vkom::Result::Success);
+
+    /* TODO: more accurate count of descriptor types */
+    /*
+    vkom::DescriptorPoolDescriptorInfo moduleDescriptorPoolDescriptorInfos[2] = {};
+    moduleDescriptorPoolDescriptorInfos[0].flags = vkom::DescriptorFlags::UniformBuffer;
+    moduleDescriptorPoolDescriptorInfos[0].count = 256;
+    moduleDescriptorPoolDescriptorInfos[1].flags = vkom::DescriptorFlags::StorageTexture;
+    moduleDescriptorPoolDescriptorInfos[1].count = 256;
+    */
+
+    /* TODO: more accurate count of descriptor sets */
+    /*
+    vkom::DescriptorPoolInfo moduleDescriptorPoolInfo = {};
+    moduleDescriptorPoolInfo.maxDescriptorSets = 256;
+    moduleDescriptorPoolInfo.descriptorCount = 2;
+    moduleDescriptorPoolInfo.descriptors = &moduleDescriptorPoolDescriptorInfos[0];
+
+    vkom::IDescriptorPool* moduleDescriptorPool;
+    assert(gpuContext.device->createDescriptorPool(&moduleDescriptorPoolInfo, &moduleDescriptorPool) == vkom::Result::Success);
+
+    vkom::IDescriptorSet* moduleCommonUniformsDescriptorSet;
+    assert(moduleDescriptorPool->allocateDescriptorSets(moduleCommonUniformsDescriptorSetLayout, 1, &moduleCommonUniformsDescriptorSet) == vkom::Result::Success);
+
+    vkom::IDescriptorSet* moduleTileDescriptorSet;
+    assert(moduleDescriptorPool->allocateDescriptorSets(moduleTileDescriptorSetLayout, 1, &moduleTileDescriptorSet) == vkom::Result::Success);
+    */
+
+    vkom::AdapterLimits adapterLimits;
+    gpuContext.adapter->queryLimits(&adapterLimits);
+
+    vkom::PushConstantRange globalPipelineLayoutPushConstantRange = {};
+    globalPipelineLayoutPushConstantRange.offset = 0;
+    globalPipelineLayoutPushConstantRange.size = adapterLimits.maxPushConstantsSize;
+    globalPipelineLayoutPushConstantRange.stages = vkom::ShaderStageFlags::Compute;
+
+    vkom::PipelineLayoutInfo globalPipelineLayoutInfo = {};
+    globalPipelineLayoutInfo.pushConstantRangeCount = 1;
+    globalPipelineLayoutInfo.pushConstantRanges = &globalPipelineLayoutPushConstantRange;
+
+    vkom::IPipelineLayout* globalPipelineLayout;
+    assert(gpuContext.device->createPipelineLayout(&globalPipelineLayoutInfo, &globalPipelineLayout) == vkom::Result::Success);
+
+    const char* accumulatorModuleSource = R"(
+#include <klatr/klatr.glsl>
+
+bool module(uint id, uint N) {
+    KlatrPushConstants pc = klatrPushConstants();
+
+    /* TODO: parallel prefix sum (https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda) */
+    float sum = 0.0;
+    for (uint i = 0; i < id - 1; i += 1) {
+        float v;
+        klatrReadBufferFloat(pc.buffers[1], i, v, 0.0);
+
+        sum += v;
+    }
+
+    klatrWriteBufferFloat(pc.buffers[0], id, sum);
+    return true;
+}
+)";
+
+    const char* differentiatorModuleSource = R"(
+#include <klatr/klatr.glsl>
+
+bool module(uint id, uint N) {
+    KlatrPushConstants pc = klatrPushConstants();
+
+    float x[2];
+    klatrReadBufferFloat(pc.buffers[1], id, x[0], 0.0);
+    klatrReadBufferFloat(pc.buffers[1], id + 1, x[1], x[0]);
+
+    float dx = x[1] - x[0];
+    klatrWriteBufferFloat(pc.buffers[0], id, x[0]);
 
     return true;
 }
 )";
 
-    std::unordered_map<std::string, std::string> systemIncludeFiles = {};
-    systemIncludeFiles["klatr/klatr.hlsl"] = klatrKlatrSource;
+    const char* saw480HzModuleSource = R"(
+#include <klatr/klatr.glsl>
 
-    std::unordered_map<std::string, std::string> localIncludeFiles = {};
+bool module(uint id, uint N) {
+    KlatrPushConstants pc = klatrPushConstants();
 
-    vkom::IComputePipeline* testModulePipeline = compileComputePipeline(gpuContext.device, globalPipelineLayout, testModuleSource, std::strlen(testModuleSource), systemIncludeFiles, localIncludeFiles);
-    assert(testModulePipeline != nullptr);
+    klatrWriteBufferFloat(pc.buffers[0], id, float(id % 100) / 50.0 - 1.0);
+    return true;
+}
+)";
+
+    struct Module {
+        klatr::gpu::Context& _context;
+        vkom::IPipelineLayout* _layout;
+        vkom::IComputePipeline* _pipeline = nullptr;
+
+        std::unordered_map<uint32_t, PushConstantAudioBufferDescriptor> _buffers = {};
+
+        Module(klatr::gpu::Context& context, vkom::IPipelineLayout* layout) : _context(context), _layout(layout) {}
+
+        Module(klatr::gpu::Context& context, vkom::IPipelineLayout* layout, std::string const& source) : _context(context), _layout(layout) {
+            assert(compile(source));
+        }
+
+        bool compile(std::string const& source) {
+            std::unordered_map<std::string, std::string> systemIncludeFiles = {};
+            systemIncludeFiles["klatr/klatr.glsl"] = klatrKlatrSource;
+
+            std::unordered_map<std::string, std::string> localIncludeFiles = {};
+
+            vkom::IComputePipeline* pipeline = compileComputePipeline(_context.device, _layout, source.c_str(), source.size(), systemIncludeFiles, localIncludeFiles);
+            if (pipeline == nullptr) {
+                return false;
+            }
+
+            if (_pipeline != nullptr) {
+                _pipeline->release();
+            }
+
+            _pipeline = pipeline;
+            return true;
+        }
+
+        void bind(uint32_t id, PushConstantAudioBufferDescriptor const& descriptor) {
+            _buffers[id] = descriptor;
+        }
+
+        void unbind(uint32_t id) {
+            _buffers.erase(id);
+        }
+
+        void constant(uint32_t id, uint32_t count, AudioBufferConfigFlags config, float value) {
+            _buffers[id] = PushConstantAudioBufferDescriptor(0, count, AudioBufferConfigFlags::AccessRead | config, value, value);
+        }
+
+        void constant(uint32_t id, float value) {
+            _buffers[id] = PushConstantAudioBufferDescriptor(0, 1, AudioBufferConfigFlags::AccessRead | AudioBufferConfigFlags::IndexWraparound, value, value);
+        }
+
+        bool execute(vkom::ICommandEncoder* encoder, uint32_t sampleRate, uint64_t dispatchSampleIndex, uint32_t width, uint32_t height, uint32_t depth) {
+            if (_pipeline == nullptr) {
+                return false;
+            }
+
+            vkom::ComputePassDescriptor passDescriptor = {};
+
+            vkom::IComputePass* pass = encoder->beginComputePass(&passDescriptor);
+            pass->bindPipeline(_pipeline);
+
+            PushConstants pushConstants = {};
+            pushConstants.sampleRate = sampleRate;
+            pushConstants.dispatchSampleIndex = dispatchSampleIndex;
+
+            for (uint32_t i = 0; i < sizeof(pushConstants.buffers) / sizeof(pushConstants.buffers[0]); i += 1) {
+                auto it = _buffers.find(i);
+                if (it == _buffers.end()) {
+                    continue;
+                }
+
+                pushConstants.buffers[i] = it->second;
+            }
+
+            pass->pushConstants(_layout, vkom::ShaderStageFlags::Compute, 0, sizeof(PushConstants), &pushConstants);
+            pass->dispatch(width, height, depth);
+            pass->end();
+
+            return true;
+        }
+    };
+
+    Module accumulator = Module(gpuContext, globalPipelineLayout, accumulatorModuleSource);
+    Module differentiator = Module(gpuContext, globalPipelineLayout, differentiatorModuleSource);
+    Module saw480Hz = Module(gpuContext, globalPipelineLayout, saw480HzModuleSource);
 
     //vkom::PushConstantRange modulePipelineLayoutPushConstantRanges[1] = {};
     //modulePipelineLayoutPushConstantRanges[0].offset = 0;
@@ -1869,30 +1858,10 @@ bool module(uint id) {
     vkom::ICommandEncoder* encoder;
     assert(gpuContext.audioComputeQueue->acquireCommandEncoder(&encoder) == vkom::Result::Success);
 
-    vkom::ComputePassDescriptor cp = {};
+    saw480Hz.bind(0, PushConstantAudioBufferDescriptor(cpuEndpointBufferDA, AudioBufferConfigFlags::AccessWrite | AudioBufferConfigFlags::IndexWraparound));
+    saw480Hz.bind(1, PushConstantAudioBufferDescriptor(cpuInputBufferDA, AudioBufferConfigFlags::AccessRead | AudioBufferConfigFlags::IndexWraparound));
 
-    vkom::IComputePass* pass = encoder->beginComputePass(&cp);
-    assert(pass != nullptr);
-
-    pass->bindPipeline(testModulePipeline);
-
-    PushConstants pushConstants = {};
-    pushConstants.sampleRate = sampleRate;
-    pushConstants.dispatchSampleIndex = 0;
-    pushConstants.buffers[0].gpuAddress = cpuEndpointBufferDA->deviceAddress();
-    pushConstants.buffers[0].count = sampleCount;
-    pushConstants.buffers[0].config = AudioBufferConfigFlags::AccessWrite | AudioBufferConfigFlags::IndexMirror;
-    pushConstants.buffers[0].lowerBound = -1.0f;
-    pushConstants.buffers[0].upperBound = 1.0f;
-    pushConstants.buffers[1].gpuAddress = cpuInputBufferDA->deviceAddress();
-    pushConstants.buffers[1].count = maDecodedFrameCount;
-    pushConstants.buffers[1].config = AudioBufferConfigFlags::AccessRead | AudioBufferConfigFlags::FormatInt | AudioBufferConfigFlags::IndexWraparound;
-    pushConstants.buffers[1].lowerBound = 1.0 / std::numeric_limits<int32_t>::min();
-    pushConstants.buffers[1].upperBound = 1.0 / std::numeric_limits<int32_t>::max();
-
-    pass->pushConstants(globalPipelineLayout, vkom::ShaderStageFlags::Compute, 0, sizeof(PushConstants), &pushConstants);
-    pass->dispatch((sampleCount + 1023) / 1024, 1, 1);
-    pass->end();
+    assert(saw480Hz.execute(encoder, sampleRate, 0, (sampleCount + 1023) / 1024, 1, 1));
 
     vkom::ICommandBatch* batch;
     assert(encoder->batch(&batch) == vkom::Result::Success);
@@ -1923,13 +1892,29 @@ bool module(uint id) {
                     if (event.key.key >= SDLK_A && event.key.key <= SDLK_Z) {
                         ma_encoder_config maEncoderConfig = ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, channelCount, sampleRate);
 
-                        char filename[10] = "out_X.wav";
-                        filename[4] = event.key.key - SDLK_A + 'a';
+                        char filenameWAV[10] = "out_X.wav";
+                        char filenameTXT[10] = "out_X.txt";
+
+                        filenameWAV[4] = event.key.key - SDLK_A + 'a';
+                        filenameTXT[4] = filenameWAV[4];
 
                         ma_encoder maEncoder = {};
-                        assert(ma_encoder_init_file(filename, &maEncoderConfig, &maEncoder) == MA_SUCCESS);
+                        assert(ma_encoder_init_file(filenameWAV, &maEncoderConfig, &maEncoder) == MA_SUCCESS);
+
+                        std::ofstream of = std::ofstream(filenameTXT, std::ios::binary);
 
                         void* cpuEndpointBufferMapped = cpuEndpointBuffer->map();
+                        for (uint32_t i = 0; i < frameCount; i += 1) {
+                            if ((i & 0x3f) == 0x00) {
+                                of << "\n[" << i << "]: ";
+                            }
+
+                            of << reinterpret_cast<float*>(cpuEndpointBufferMapped)[i] << ", ";
+                        }
+
+                        of.flush();
+                        of.close();
+
                         assert(cpuEndpointBufferMapped != nullptr);
                         assert(ma_encoder_write_pcm_frames(&maEncoder, cpuEndpointBufferMapped, frameCount, nullptr) == MA_SUCCESS);
                         cpuEndpointBuffer->unmap();
