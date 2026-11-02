@@ -1,0 +1,4 @@
+[wrap-git]
+directory=glslang
+url=https://github.com/nyorain/glslang.git
+revision=master

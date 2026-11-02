@@ -5,6 +5,8 @@ project('klatr',
     default_options: [ 'cpp_std=c++20' ]
 )
 
+cc = meson.get_compiler('cpp')
+
 vkom_subproject = subproject('vkom')
 kom_subproject = subproject('kom')
 sdl3_subproject = subproject('sdl3')
@@ -14,6 +16,9 @@ vkom = dependency('vkom', version: '0.1.11', required: true)
 kom = dependency('kom', version: '1.0.1', required: true)
 sdl3 = dependency('sdl3', version: '>=3.2.0', required: true)
 miniaudio = dependency('miniaudio', version: '>=0.11.0', required: true)
+# dxc = cc.find_library('dxcompiler', required: true)
+# dxguid = cc.find_library('dxguid', required: true)
+glslang = dependency('glslang', fallback: ['glslang', 'glslang_dep'], static: true)
 
 klatr_sources = [
     # bootstrap and temp impl
@@ -88,7 +93,7 @@ klatr_sources = [
 ]
 
 klatr_includes = include_directories('src')
-klatr_dependencies = [ vkom, kom, sdl3, miniaudio ]
+klatr_dependencies = [ vkom, kom, sdl3, miniaudio, glslang ]
 klatr_override_options = [ 'cpp_std=c++20' ]
 
 cc = meson.get_compiler('c')

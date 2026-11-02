@@ -27,9 +27,11 @@ PushConstants pushConstants;
 [[vk::binding(0, 0)]]
 ConstantBuffer<Uniforms> uniforms;
 
+/*
 [[vk::binding(0, 1)]]
 [[vk::image_format("rgba8")]]
 RWTexture2D<float4> tiles[1];
+*/
 
 #define pi float(3.14159265358979323846f)
 
